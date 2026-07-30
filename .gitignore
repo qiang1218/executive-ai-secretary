@@ -1,69 +1,207 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# =============================================================================
+# .gitignore — Executive AI Secretary monorepo
+# =============================================================================
+# Conventions:
+# - Patterns starting with `/` are anchored to the repo root.
+# - Patterns with `**/` match at any depth (recursive).
+# - Sections group related patterns; comments explain *why* each is ignored
+#   so future maintainers don't accidentally remove a needed rule.
+# =============================================================================
 
-# dependencies
+# -----------------------------------------------------------------------------
+# Dependencies — package manager artifacts (never commit)
+# -----------------------------------------------------------------------------
 /node_modules
-/frontend/node_modules
+**/node_modules
 /.pnp
 .pnp.*
+
+# Yarn 1 classic (Berry PnP) — we don't use it, but ignore in case it's added
 .yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
 
-# testing
+# -----------------------------------------------------------------------------
+# Test / coverage artifacts
+# -----------------------------------------------------------------------------
 /coverage
+**/coverage
+**/.nyc_output
 
-# next.js
-/.next/
-/.vinext/
+# -----------------------------------------------------------------------------
+# Build / dev artifacts — Next.js, vinext, vite, wrangler/miniflare
+# -----------------------------------------------------------------------------
+# Next.js
+**/.next/
 /out/
 
-# misc
-.DS_Store
-*.pem
+# vinext (Vite + Next.js on Cloudflare Workers)
+**/.vinext/
 
-# debug
+# Wrangler / Miniflare local state (Cloudflare local dev)
+**/.wrangler/
+**/.mf/
+
+# Vite generic
+**/.vite/
+**/.vite-cache/
+
+# Generic build output dirs
+**/dist/
+**/build/  # only matches top-level build outputs; src/build/ is intentional
+!/frontend/build/  # negate: this directory is committed (sites-vite-plugin.ts)
+
+# Vercel
+.vercel
+**/.vercel
+
+# Playwright
+**/.playwright-cli/
+**/playwright-report/
+**/playwright/.cache/
+
+# TypeScript incremental build
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# next-env.d.ts is auto-generated per-checkout
+next-env.d.ts
+**/next-env.d.ts
+
+# -----------------------------------------------------------------------------
+# Environment files — secrets must NEVER be committed
+# -----------------------------------------------------------------------------
+.env*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+!deploy/environments/*.env.example
+!backend/deploy/environments/*.env.example
+
+# -----------------------------------------------------------------------------
+# Runtime / local production data (SQLite WAL, encrypted blobs, etc.)
+# -----------------------------------------------------------------------------
+/data/
+**/data/
+/backups/
+**/backups/
+/runtime/
+**/runtime/
+**/deploy/data/
+**/deploy/backups/
+/deploy/data/
+/deploy/backups/
+
+# -----------------------------------------------------------------------------
+# Logs — every kind, recursive
+# -----------------------------------------------------------------------------
+*.log
+**/*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+lerna-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
-!deploy/.env.example
-!deploy/environments/*.env.example
+# dev-stdout / dev-stderr / dev.log patterns
+**/dev*.log
 
-# local production data and secrets
-/data/
-/backups/
-/runtime/
-/deploy/data/
-/deploy/backups/
-*.key
-*.secret
-
-# python
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
 __pycache__/
+**/__pycache__/
 *.py[cod]
+**/*.py[cod]
+*$py.class
+.Python
+**/.Python
+
 .pytest_cache/
+**/.pytest_cache/
 .ruff_cache/
+**/.ruff_cache/
 .mypy_cache/
+**/.mypy_cache/
+
+# Virtualenvs
 .venv/
+**/.venv/
 /backend/.venv
 /services/api/.venv
 /services/worker/.venv
 
-# vercel
-.vercel
+# Distribution / packaging
+*.egg-info/
+*.egg
+build/
+dist/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# typescript
-next-env.d.ts
-*.tsbuildinfo
-/dist/
-/.wrangler/
+# Jupyter
+.ipynb_checkpoints
+profile_default/
+
+# uv
+**/.python-version.bak
+uv.lock.json
+
+# Alembic
+**/alembic/versions/__pycache__/
+
+# -----------------------------------------------------------------------------
+# Editor / OS
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+.DS_Store?
+*.swp
+*.swo
+*~
+.idea/
+**/.idea/
+.vscode/
+**/.vscode/
+!.vscode/settings.json  # allow per-repo IDE settings (currently none committed)
+
+# -----------------------------------------------------------------------------
+# Security / secrets
+# -----------------------------------------------------------------------------
+*.key
+*.secret
+*.pem
+*.p12
+*.pfx
+*.keystore
+**/*.key
+**/*.secret
+**/*.pem
+
+# OpenAI Codex workspace descriptor (per-developer, never commit)
+.openai/
+
+# -----------------------------------------------------------------------------
+# Outputs (CI / build pipeline)
+# -----------------------------------------------------------------------------
 /outputs/
 /output/
-/\.playwright-cli/
 /work/
+
+# -----------------------------------------------------------------------------
+# Misc / safety net
+# -----------------------------------------------------------------------------
+*.tgz
+*.zip
+*.tar.gz
+*.bak
+*.swp
+*.tmp
+*~
+.DS_Store
+
+# Lock files we don't commit (package-lock.json IS committed for npm)
+# (none currently — placeholder for future)
