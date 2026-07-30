@@ -82,7 +82,7 @@ services:
       - postgres_runtime_password
       - postgres_backup_password
     volumes:
-      - ./backend/deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
+      - ./deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
     networks:
       - backend
     depends_on:
@@ -150,7 +150,7 @@ services:
       - postgres_runtime_password
       - postgres_backup_password
     volumes:
-      - ./backend/deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
+      - ./deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
     networks:
       - backend
     depends_on:
