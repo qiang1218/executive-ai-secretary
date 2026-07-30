@@ -11,7 +11,7 @@ import {
   loadProductionBootstrap,
   productionServices,
 } from "./services";
-import { ProductionWorkspace } from "./production-workspace";
+import { ProductionWorkspace } from "./workspace";
 import type {
   AuthMe,
   ProductionBootstrap,

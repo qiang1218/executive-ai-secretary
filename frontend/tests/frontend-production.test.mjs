@@ -12,18 +12,30 @@ test("production mode is explicit and invalid configuration fails closed", () =>
   assert.throws(() => resolveAppMode("prod"), /Invalid NEXT_PUBLIC_APP_MODE/);
 });
 
-test("demo and production use physically separate route entrypoints", async () => {
+test("root page is a thin mode dispatcher, demo content lives in app/demo/", async () => {
   const page = await read("../app/page.tsx");
-  const productionPage = await read("../app/page.production.tsx");
-  assert.match(page, /return <DemoProductPrototype \/>/);
-  assert.doesNotMatch(page, /ProductionApplication|production-app/);
-  assert.match(productionPage, /return <ProductionApplication \/>/);
-  assert.doesNotMatch(productionPage, /prototype-data|DemoProductPrototype/);
+  const demoPrototype = await read("../app/demo/prototype.tsx");
+
+  // Dispatcher imports both targets and selects at render time.
+  assert.match(page, /from ".\/demo\/prototype"/);
+  assert.match(page, /from ".\/production\/app"/);
+  assert.match(page, /return appMode === "production" \? <ProductionApplication \/> : <DemoProductPrototype \/>/);
+
+  // Dispatcher must remain thin: no fixtures, no credentials, no inline body.
+  assert.doesNotMatch(page, /Demo@2026|Admin@2026|sk-demo-masked-key|prototype-data|initialConversations|organizationCatalog|demoScenarios/);
+  const lineCount = page.split("\n").length;
+  assert.ok(lineCount < 40, `app/page.tsx should stay a thin dispatcher (< 40 lines) but has ${lineCount}`);
+
+  // Demo content is fully relocated and remains self-contained.
+  assert.match(demoPrototype, /^export function DemoProductPrototype/m);
+  assert.match(demoPrototype, /Demo@2026/);
+  assert.doesNotMatch(demoPrototype, /ProductionApplication|production-app/);
+  assert.doesNotMatch(demoPrototype, /from ".\.\/production/);
 });
 
 test("production application has no fixture dependency or demo credential", async () => {
-  const productionApp = await read("../app/production/production-app.tsx");
-  const productionWorkspace = await read("../app/production/production-workspace.tsx");
+  const productionApp = await read("../app/production/app.tsx");
+  const productionWorkspace = await read("../app/production/workspace.tsx");
   const productionSource = `${productionApp}\n${productionWorkspace}`;
   const types = await read("../app/production/types.ts");
   assert.match(productionApp, /ProductionWorkspace/);
