@@ -30,7 +30,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/executive_ai_api"]
+packages = ["src/executive_ai_api", "src/worker/executive_ai_worker"]
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --disable-warnings"

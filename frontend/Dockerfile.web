@@ -15,7 +15,6 @@ COPY . .
 RUN if [ "${NEXT_PUBLIC_APP_MODE}" != "production" ]; then \
       echo "Dockerfile.web only builds the production entrypoint" >&2; exit 64; \
     fi \
-    && cp app/page.production.tsx app/page.tsx \
     && npm run build \
     && node scripts/assert-production-artifact.mjs dist
 
