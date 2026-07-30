@@ -44,9 +44,20 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      // Dev 模式下把 /api/* 代理到本地后端（127.0.0.1:8000），
+      // 这样浏览器同源访问 /api/v1/...，无 CORS，前端代码无需改。
+      proxy: {
+        "/api": {
+          target: "http://127.0.0.1:8000",
+          changeOrigin: true,
+          // 保留 /api 前缀，后端路由本来就是 /api/v1/*
+        },
+      },
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+    },
     plugins: [
       vinext(),
       sites(),
