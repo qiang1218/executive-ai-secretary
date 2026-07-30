@@ -82,7 +82,7 @@ services:
       - postgres_runtime_password
       - postgres_backup_password
     volumes:
-      - ./deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
+      - ./backend/deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
     networks:
       - backend
     depends_on:
@@ -100,7 +100,7 @@ services:
 
   migrate:
     build:
-      context: ./services/api
+      context: ./backend
       dockerfile: Dockerfile
     image: ${API_IMAGE:-executive-ai-api:local}
     restart: "no"
@@ -150,7 +150,7 @@ services:
       - postgres_runtime_password
       - postgres_backup_password
     volumes:
-      - ./deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
+      - ./backend/deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
     networks:
       - backend
     depends_on:
@@ -168,7 +168,7 @@ services:
 
   api:
     build:
-      context: ./services/api
+      context: ./backend
       dockerfile: Dockerfile
     image: ${API_IMAGE:-executive-ai-api:local}
     restart: unless-stopped
@@ -219,8 +219,8 @@ services:
 
   worker:
     build:
-      context: .
-      dockerfile: services/worker/Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile
     image: ${WORKER_IMAGE:-executive-ai-worker:local}
     restart: unless-stopped
     environment:

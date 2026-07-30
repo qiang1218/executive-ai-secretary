@@ -1,21 +1,21 @@
 """Create the first enterprise administrator for a fresh local database.
 
 Usage (PowerShell, from repo root):
-    Get-Content .env-services-api -Raw  # copy to services/api/.env if missing
+    Get-Content .env-backend -Raw  # copy to backend/.env if missing
     "YourStrongP@ssw0rd" | .venv/Scripts/python.exe scripts/create_admin.py `
         --email admin@example.com `
         --display-name "Admin User" `
         --enterprise-name "Acme Inc" `
         --enterprise-slug acme
 
-Or via the project venv from services/api:
+Or via the project venv from backend:
     echo "YourStrongP@ssw0rd" | .venv/Scripts/python.exe ..\\..\\scripts\\create_admin.py ...
 
 Notes:
 - Password is read from STDIN to avoid leaking into shell history / process listings.
 - Reads SESSION_SECRET / CSRF_SECRET / AUDIT_HMAC_KEY / FILE_ENCRYPTION_KEY from
-  services/api/.env (pydantic Settings picks them up automatically when CWD is
-  services/api).  Run from there, or pre-export the values in your shell.
+  backend/.env (pydantic Settings picks them up automatically when CWD is
+  backend).  Run from there, or pre-export the values in your shell.
 - Idempotent on enterprise slug, refuses if an admin already exists for the
   enterprise (use the admin API to add additional users).
 """
@@ -58,7 +58,7 @@ def main() -> int:
         )
         return 2
 
-    # Make sure pydantic Settings finds .env in services/api/.
+    # Make sure pydantic Settings finds .env in backend/.
     os.chdir(API_DIR)
     sys.path.insert(0, str(API_SRC))
 

@@ -49,7 +49,7 @@ npm run typecheck
 npm test
 npm run security:audit
 
-cd services/api
+cd backend
 uv sync --frozen --extra dev
 uv run ruff check .
 uv run pytest

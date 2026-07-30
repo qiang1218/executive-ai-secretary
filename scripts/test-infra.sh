@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -135,8 +135,7 @@ grep -q 'DEMO_ENTERPRISE_SLUG: demo-enterprise' <<< "${seed_config}" \
   || die "demo seed enterprise slug is not injected"
 
 for application_dockerfile in \
-  "${REPO_ROOT}/services/api/Dockerfile" \
-  "${REPO_ROOT}/services/worker/Dockerfile"; do
+  "${REPO_ROOT}/backend/Dockerfile"; do
   grep -Eq 'groupadd .*--gid 999' "${application_dockerfile}" \
     || die "application Dockerfile does not pin the shared gid to 999: ${application_dockerfile}"
   grep -Eq 'useradd .*--uid 999' "${application_dockerfile}" \
@@ -146,9 +145,8 @@ done
 # Every external build-stage source must retain a human-readable tag and an
 # immutable sha256 manifest-list digest. Named stages declared earlier in the
 # same Dockerfile are the only unpinned FROM/COPY --from values permitted.
-python3 - "${REPO_ROOT}/Dockerfile.web" \
-  "${REPO_ROOT}/services/api/Dockerfile" \
-  "${REPO_ROOT}/services/worker/Dockerfile" <<'PY'
+python3 - "${REPO_ROOT}/frontend/Dockerfile.web" \
+  "${REPO_ROOT}/backend/Dockerfile" <<'PY'
 from __future__ import annotations
 
 import pathlib
@@ -183,11 +181,10 @@ PY
 node_base='public.ecr.aws/docker/library/node:22.23.1-alpine3.24@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2'
 python_base='public.ecr.aws/docker/library/python:3.12.13-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de'
 uv_base='ghcr.io/astral-sh/uv:0.10.5@sha256:476133fa2aaddb4cbee003e3dc79a88d327a5dc7cb3179b7f02cabd8fdfbcc6e'
-[ "$(grep -Fc "${node_base}" "${REPO_ROOT}/Dockerfile.web")" -eq 2 ] \
+[ "$(grep -Fc "${node_base}" "${REPO_ROOT}/frontend/Dockerfile.web")" -eq 2 ] \
   || die "web build does not use the reviewed Node manifest for both external stages"
 for application_dockerfile in \
-  "${REPO_ROOT}/services/api/Dockerfile" \
-  "${REPO_ROOT}/services/worker/Dockerfile"; do
+  "${REPO_ROOT}/backend/Dockerfile"; do
   grep -Fq "${python_base}" "${application_dockerfile}" \
     || die "application build does not use the reviewed Python manifest: ${application_dockerfile}"
   grep -Fq "${uv_base}" "${application_dockerfile}" \
