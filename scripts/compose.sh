@@ -10,5 +10,4 @@ environment="${1:-}"
 shift
 validate_environment_name "${environment}"
 require_command docker
-require_secret_files "${environment}"
 compose "${environment}" "$@"

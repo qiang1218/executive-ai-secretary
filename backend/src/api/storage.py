@@ -141,12 +141,17 @@ class LocalEncryptedStorage:
                 output.flush()
                 os.fsync(output.fileno())
             os.chmod(temporary, 0o600)
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.replace(temporary, target)
-            directory_fd = os.open(target.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            # Best-effort directory fsync so the rename is durable on POSIX.
+            # os.open(path, O_RDONLY) is unreliable on Windows when the
+            # directory was just created, so we skip fsync there.
+            if os.name != "nt":
+                directory_fd = os.open(target.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         except Exception:
             temporary.unlink(missing_ok=True)
             raise

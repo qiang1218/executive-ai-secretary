@@ -15,8 +15,8 @@ os.environ.update(
     }
 )
 
-from executive_ai_api.database import Base, SessionLocal, engine
-from executive_ai_api.models import (
+from api.database import Base, SessionLocal, engine
+from api.models import (
     Conversation,
     DataScopeGrant,
     Enterprise,
@@ -26,10 +26,10 @@ from executive_ai_api.models import (
     OrganizationUnit,
     User,
 )
-from executive_ai_api.security import utc_now
+from api.security import utc_now
 from sqlalchemy import delete, select
 
-from executive_ai_worker.main import authorization_is_current, process, worker_id
+from worker.main import authorization_is_current, process, worker_id
 
 
 def test_worker_rechecks_scope_snapshot_before_processing() -> None:

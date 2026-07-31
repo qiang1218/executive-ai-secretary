@@ -10,21 +10,21 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from executive_ai_api.authz import scope_snapshot_is_current_for_user
-from executive_ai_api.config import get_settings
-from executive_ai_api.database import SessionLocal
-from executive_ai_api.job_state import (
+from api.authz import scope_snapshot_is_current_for_user
+from configs.settings import get_settings
+from api.database import SessionLocal
+from api.job_state import (
     ASSISTANT_NOT_CONFIGURED_CONTENT,
     close_assistant_placeholder,
 )
-from executive_ai_api.logging_config import configure_logging
-from executive_ai_api.models import AuditEvent, Enterprise, Job, JobAttempt, User
-from executive_ai_api.security import as_utc, utc_now
+from api.logging_config import configure_logging
+from api.models import AuditEvent, Enterprise, Job, JobAttempt, User
+from api.security import as_utc, utc_now
 from sqlalchemy import func, or_, select
 
 settings = get_settings()
 configure_logging(settings.log_level)
-logger = logging.getLogger("executive_ai_worker")
+logger = logging.getLogger("worker")
 stopping = False
 worker_id = f"{socket.gethostname()}:{os.getpid()}"
 RETRY_EXHAUSTED_CONTENT = "处理任务多次中断，请稍后重试"

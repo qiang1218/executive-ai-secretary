@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import uuid
 from datetime import timedelta
@@ -15,7 +15,7 @@ from ..authz import (
     get_authenticated_principal,
     get_current_principal,
 )
-from ..config import Settings, get_settings
+from configs.settings import Settings, get_settings
 from ..database import get_db
 from ..errors import AppError
 from ..models import Enterprise, OrganizationUnit, User, UserCredential, UserSession

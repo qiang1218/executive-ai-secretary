@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import stat
 from functools import lru_cache
@@ -15,6 +16,15 @@ KEY_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class Settings(BaseSettings):
+    """Single source of truth for runtime configuration.
+
+    Settings are populated from environment variables (and an optional
+    ``backend/.env`` for local development). The Pydantic ``model_validator``
+    enforces non-default values for protected environments (``production``,
+    ``customer-template``, or any app_mode=production service) and a handful
+    of cross-field invariants (worker heartbeat < lease, etc.).
+    """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -32,6 +42,14 @@ class Settings(BaseSettings):
     service_role: Literal["api", "worker", "migration", "bootstrap", "seed"] = "api"
     debug: bool = False
     api_prefix: str = "/api/v1"
+
+    # The current alembic head revision. Health checks compare the live
+    # database revision to this value. Override with EXPECTED_ALEMBIC_REVISION
+    # in .env when a migration is added.
+    expected_alembic_revision: str = Field(
+        default="c5d91f4a8b72",
+        validation_alias=AliasChoices("EXPECTED_ALEMBIC_REVISION", "DATABASE_REVISION"),
+    )
 
     database_url: str = "postgresql+psycopg://executive_ai:executive_ai@localhost:5432/executive_ai"
     database_pool_size: int = Field(default=10, ge=1, le=100)
@@ -59,7 +77,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("FILE_STORAGE_ROOT", "STORAGE_ROOT"),
     )
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
-
     session_cookie_name: str = "exec_session"
     csrf_cookie_name: str = "exec_csrf"
     session_cookie_secure: bool = Field(
@@ -97,6 +114,15 @@ class Settings(BaseSettings):
     def split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    @field_validator("file_storage_root", mode="before")
+    @classmethod
+    def coerce_path(cls, value: object) -> object:
+        if value in (None, ""):
+            return value
+        if isinstance(value, str):
+            return Path(value)
         return value
 
     @field_validator(
@@ -211,7 +237,11 @@ class Settings(BaseSettings):
             path = file_path.expanduser().resolve()
             if not path.is_file():
                 raise RuntimeError(f"{variable_name}_FILE must reference a readable regular file")
-            if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            # POSIX enforces the "not readable by group or others" rule on
+            # key files.  Windows ACLs do not surface a unix mode bit, so
+            # we only enforce this on POSIX and rely on the secret-file
+            # convention in deploy/README.md for Windows.
+            if os.name != "nt" and stat.S_IMODE(path.stat().st_mode) & 0o077:
                 raise RuntimeError(f"{variable_name}_FILE must not be readable by group or others")
             raw = path.read_text(encoding="utf-8").strip()
         else:

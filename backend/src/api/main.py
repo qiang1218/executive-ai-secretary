@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,7 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .audit_integrity import initialize_audit_chains
 from .authz import csrf_protect
-from .config import get_settings
+from configs.settings import get_settings
 from .database import engine
 from .errors import (
     AppError,

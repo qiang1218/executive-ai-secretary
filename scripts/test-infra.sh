@@ -412,7 +412,7 @@ if PATH="${release_fixture_dir}/bin:${PATH}" \
 fi
 
 restore_script="${SCRIPT_DIR}/restore.sh"
-compatibility_line="$(grep -n 'executive_ai_api.migration_compatibility' "${restore_script}" | head -n 1 | cut -d: -f1)"
+compatibility_line="$(grep -n 'api.migration_compatibility' "${restore_script}" | head -n 1 | cut -d: -f1)"
 destructive_restore_line="$(grep -n 'pg_restore --username' "${restore_script}" | head -n 1 | cut -d: -f1)"
 if [ -z "${compatibility_line}" ] || [ -z "${destructive_restore_line}" ] \
   || [ "${compatibility_line}" -ge "${destructive_restore_line}" ]; then

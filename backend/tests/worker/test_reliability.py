@@ -15,8 +15,8 @@ os.environ.update(
     }
 )
 
-from executive_ai_api.database import Base, SessionLocal, engine
-from executive_ai_api.models import (
+from api.database import Base, SessionLocal, engine
+from api.models import (
     Conversation,
     DataScopeGrant,
     Enterprise,
@@ -26,10 +26,10 @@ from executive_ai_api.models import (
     OrganizationUnit,
     User,
 )
-from executive_ai_api.security import utc_now
+from api.security import utc_now
 from sqlalchemy import select
 
-from executive_ai_worker import main as worker
+from worker import main as worker
 
 
 def _seed_job(*, status: str = "queued", attempt_count: int = 0, max_attempts: int = 3):

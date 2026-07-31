@@ -12,14 +12,14 @@ from fastapi import Request
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from executive_ai_api.authz import Principal
-from executive_ai_api.database import Base
-from executive_ai_api.errors import AppError
-from executive_ai_api.models import Enterprise, User, UserSession
-from executive_ai_api.routers import admin as admin_router
-from executive_ai_api.routers.admin import update_user
-from executive_ai_api.schemas import UserUpdate
-from executive_ai_api.security import utc_now
+from api.authz import Principal
+from api.database import Base
+from api.errors import AppError
+from api.models import Enterprise, User, UserSession
+from api.routers import admin as admin_router
+from api.routers.admin import update_user
+from api.schemas import UserUpdate
+from api.security import utc_now
 
 
 def _request() -> Request:

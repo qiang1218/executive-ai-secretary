@@ -46,7 +46,7 @@
     export DATABASE_URL="postgresql+psycopg://${POSTGRES_RUNTIME_USER}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB}"
     export FILE_ENCRYPTION_KEY="$(cat /run/rotation/current-file-key)"
     export AUDIT_HMAC_KEY="$(cat /run/secrets/audit_hmac_key)"
-    python -m executive_ai_api.rotate_file_keys --from-version v1 --to-version v2 --dry-run
+    python -m api.rotate_file_keys --from-version v1 --to-version v2 --dry-run
   '
 ```
 
@@ -57,7 +57,7 @@
 使用同一容器挂载，同时挂载备份目录与环境的备份签名公钥，再执行：
 
 ```bash
-python -m executive_ai_api.rotate_file_keys \
+python -m api.rotate_file_keys \
   --from-version v1 \
   --to-version v2 \
   --backup-dir /backup \
@@ -71,7 +71,7 @@ python -m executive_ai_api.rotate_file_keys \
 可用 `--max-files N` 做分批维护；输出中的 `remaining` 必须归零才能视为完成。完成后再次执行：
 
 ```bash
-python -m executive_ai_api.rotate_file_keys \
+python -m api.rotate_file_keys \
   --from-version v1 --to-version v2 --verify-only
 ```
 

@@ -7,6 +7,17 @@ x-json-logging: &json-logging
     max-file: ${LOG_MAX_FILES:-5}
     compress: "true"
 
+x-backend-secrets: &backend-secrets
+  # All runtime secrets come from backend/.env via Docker's --env-file;
+  # Pydantic Settings reads the same file when the process starts.  Every
+  # secret below is required in production and customer-template.
+  SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+  CSRF_SECRET: ${CSRF_SECRET:?CSRF_SECRET is required}
+  FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:?FILE_ENCRYPTION_KEY is required}
+  FILE_ENCRYPTION_KEY_RING: ${FILE_ENCRYPTION_KEY_RING:-}
+  AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY:?AUDIT_HMAC_KEY is required}
+  AUDIT_HMAC_KEY_RING: ${AUDIT_HMAC_KEY_RING:-}
+
 x-backend-environment: &backend-environment
   APP_ENV: ${APP_ENV:?APP_ENV is required}
   APP_MODE: ${APP_MODE:?APP_MODE is required}
@@ -26,10 +37,8 @@ x-backend-environment: &backend-environment
   TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,api}
   BEHIND_TRUSTED_PROXY: "true"
   FILE_ENCRYPTION_KEY_VERSION: ${FILE_ENCRYPTION_KEY_VERSION:-v1}
-  FILE_ENCRYPTION_KEY_RING_FILE: /run/secrets/file_encryption_key_ring
   AUDIT_HMAC_KEY_VERSION: ${AUDIT_HMAC_KEY_VERSION:-v1}
   AUDIT_HMAC_LEGACY_KEY_VERSION: ${AUDIT_HMAC_LEGACY_KEY_VERSION:-v1}
-  AUDIT_HMAC_KEY_RING_FILE: /run/secrets/audit_hmac_key_ring
   WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-2}
   WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-60}
   WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-15}
@@ -44,11 +53,9 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_INITDB_ARGS: --data-checksums --encoding=UTF8
       PGDATA: /var/lib/postgresql/data/pgdata
-    secrets:
-      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -72,15 +79,10 @@ services:
       POSTGRES_RUNTIME_USER: ${POSTGRES_RUNTIME_USER:-executive_ai_runtime}
       POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER:-executive_ai_backup}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
-      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_MIGRATOR_PASSWORD_FILE: /run/secrets/postgres_migrator_password
-      POSTGRES_RUNTIME_PASSWORD_FILE: /run/secrets/postgres_runtime_password
-      POSTGRES_BACKUP_PASSWORD_FILE: /run/secrets/postgres_backup_password
-    secrets:
-      - postgres_password
-      - postgres_migrator_password
-      - postgres_runtime_password
-      - postgres_backup_password
+      POSTGRES_OWNER_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_MIGRATOR_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD:?POSTGRES_MIGRATOR_PASSWORD is required}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
+      POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD is required}
     volumes:
       - ./deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
     networks:
@@ -108,8 +110,7 @@ services:
       <<: *backend-environment
       SERVICE_ROLE: migration
       POSTGRES_MIGRATOR_USER: ${POSTGRES_MIGRATOR_USER:-executive_ai_migrator}
-    secrets:
-      - postgres_migrator_password
+      POSTGRES_MIGRATOR_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD:?POSTGRES_MIGRATOR_PASSWORD is required}
     networks:
       - backend
     depends_on:
@@ -119,8 +120,7 @@ services:
       - /bin/sh
       - -ec
       - |
-        DB_PASSWORD="$$(cat /run/secrets/postgres_migrator_password)"
-        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_MIGRATOR_USER}:$${DB_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_MIGRATOR_USER}:$${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
         exec alembic upgrade head
     read_only: true
     tmpfs:
@@ -140,15 +140,10 @@ services:
       POSTGRES_RUNTIME_USER: ${POSTGRES_RUNTIME_USER:-executive_ai_runtime}
       POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER:-executive_ai_backup}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
-      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_password
-      POSTGRES_MIGRATOR_PASSWORD_FILE: /run/secrets/postgres_migrator_password
-      POSTGRES_RUNTIME_PASSWORD_FILE: /run/secrets/postgres_runtime_password
-      POSTGRES_BACKUP_PASSWORD_FILE: /run/secrets/postgres_backup_password
-    secrets:
-      - postgres_password
-      - postgres_migrator_password
-      - postgres_runtime_password
-      - postgres_backup_password
+      POSTGRES_OWNER_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_MIGRATOR_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD:?POSTGRES_MIGRATOR_PASSWORD is required}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
+      POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD is required}
     volumes:
       - ./deploy/postgres/ensure-runtime-role.sh:/usr/local/bin/ensure-runtime-role:ro
     networks:
@@ -174,15 +169,9 @@ services:
     restart: unless-stopped
     environment:
       <<: *backend-environment
+      <<: *backend-secrets
       SERVICE_ROLE: api
-    secrets:
-      - postgres_runtime_password
-      - session_secret
-      - csrf_secret
-      - file_encryption_key
-      - file_encryption_key_ring
-      - audit_hmac_key
-      - audit_hmac_key_ring
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
     volumes:
       - file_data:/data/files
     networks:
@@ -195,13 +184,8 @@ services:
       - /bin/sh
       - -ec
       - |
-        DB_PASSWORD="$$(cat /run/secrets/postgres_runtime_password)"
-        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${DB_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
-        export SESSION_SECRET="$$(cat /run/secrets/session_secret)"
-        export CSRF_SECRET="$$(cat /run/secrets/csrf_secret)"
-        export FILE_ENCRYPTION_KEY="$$(cat /run/secrets/file_encryption_key)"
-        export AUDIT_HMAC_KEY="$$(cat /run/secrets/audit_hmac_key)"
-        exec uvicorn executive_ai_api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
+        exec uvicorn api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
       interval: 10s
@@ -225,13 +209,9 @@ services:
     restart: unless-stopped
     environment:
       <<: *backend-environment
+      <<: *backend-secrets
       SERVICE_ROLE: worker
-    secrets:
-      - postgres_runtime_password
-      - file_encryption_key
-      - file_encryption_key_ring
-      - audit_hmac_key
-      - audit_hmac_key_ring
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
     volumes:
       - file_data:/data/files
     networks:
@@ -243,11 +223,8 @@ services:
       - /bin/sh
       - -ec
       - |
-        DB_PASSWORD="$$(cat /run/secrets/postgres_runtime_password)"
-        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${DB_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
-        export FILE_ENCRYPTION_KEY="$$(cat /run/secrets/file_encryption_key)"
-        export AUDIT_HMAC_KEY="$$(cat /run/secrets/audit_hmac_key)"
-        exec python -m executive_ai_worker.main
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
+        exec python -m worker.main
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
       interval: 30s
@@ -330,13 +307,11 @@ services:
     image: ${API_IMAGE:-executive-ai-api:local}
     environment:
       <<: *backend-environment
+      <<: *backend-secrets
       SERVICE_ROLE: seed
       SEED_DEMO_DATA: "true"
       DEMO_ENTERPRISE_SLUG: ${DEMO_ENTERPRISE_SLUG:-}
-    secrets:
-      - postgres_runtime_password
-      - audit_hmac_key
-      - audit_hmac_key_ring
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
     networks:
       - backend
     depends_on:
@@ -354,10 +329,8 @@ services:
           echo "DEMO_ENTERPRISE_SLUG is required" >&2
           exit 64
         fi
-        DB_PASSWORD="$$(cat /run/secrets/postgres_runtime_password)"
-        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${DB_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
-        export AUDIT_HMAC_KEY="$$(cat /run/secrets/audit_hmac_key)"
-        exec python -m executive_ai_api.seed --enterprise-slug "$${DEMO_ENTERPRISE_SLUG}"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
+        exec python -m api.seed --enterprise-slug "$${DEMO_ENTERPRISE_SLUG}"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -372,15 +345,13 @@ services:
     image: ${API_IMAGE:-executive-ai-api:local}
     environment:
       <<: *backend-environment
+      <<: *backend-secrets
       SERVICE_ROLE: bootstrap
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       BOOTSTRAP_ADMIN_DISPLAY_NAME: ${BOOTSTRAP_ADMIN_DISPLAY_NAME:-}
       BOOTSTRAP_ENTERPRISE_NAME: ${BOOTSTRAP_ENTERPRISE_NAME:-}
       BOOTSTRAP_ENTERPRISE_SLUG: ${BOOTSTRAP_ENTERPRISE_SLUG:-}
-    secrets:
-      - postgres_runtime_password
-      - audit_hmac_key
-      - audit_hmac_key_ring
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
     networks:
       - backend
     depends_on:
@@ -390,9 +361,7 @@ services:
       - /bin/sh
       - -ec
       - |
-        DB_PASSWORD="$$(cat /run/secrets/postgres_runtime_password)"
-        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${DB_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
-        export AUDIT_HMAC_KEY="$$(cat /run/secrets/audit_hmac_key)"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
         if [ -z "$${BOOTSTRAP_ADMIN_EMAIL}" ] || \
            [ -z "$${BOOTSTRAP_ADMIN_DISPLAY_NAME}" ] || \
            [ -z "$${BOOTSTRAP_ENTERPRISE_NAME}" ] || \
@@ -400,7 +369,7 @@ services:
           echo "all bootstrap identity and enterprise fields are required" >&2
           exit 64
         fi
-        exec python -m executive_ai_api.cli create-admin \
+        exec python -m api.cli create-admin \
           --email "$${BOOTSTRAP_ADMIN_EMAIL}" \
           --display-name "$${BOOTSTRAP_ADMIN_DISPLAY_NAME}" \
           --enterprise-name "$${BOOTSTRAP_ENTERPRISE_NAME}" \
@@ -421,16 +390,14 @@ services:
     image: ${API_IMAGE:-executive-ai-api:local}
     environment:
       <<: *backend-environment
+      <<: *backend-secrets
       SERVICE_ROLE: bootstrap
       EXECUTIVE_EMAIL: ${EXECUTIVE_EMAIL:-}
       EXECUTIVE_DISPLAY_NAME: ${EXECUTIVE_DISPLAY_NAME:-}
       EXECUTIVE_ENTERPRISE_SLUG: ${EXECUTIVE_ENTERPRISE_SLUG:-}
       EXECUTIVE_SCOPE_MODE: ${EXECUTIVE_SCOPE_MODE:-}
       EXECUTIVE_ORGANIZATION_UNIT_CODES: ${EXECUTIVE_ORGANIZATION_UNIT_CODES:-}
-    secrets:
-      - postgres_runtime_password
-      - audit_hmac_key
-      - audit_hmac_key_ring
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}
     networks:
       - backend
     depends_on:
@@ -440,16 +407,14 @@ services:
       - /bin/sh
       - -ec
       - |
-        DB_PASSWORD="$$(cat /run/secrets/postgres_runtime_password)"
-        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${DB_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
-        export AUDIT_HMAC_KEY="$$(cat /run/secrets/audit_hmac_key)"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_RUNTIME_USER}:$${POSTGRES_RUNTIME_PASSWORD}@postgres:5432/$${POSTGRES_DB}"
         if [ -z "$${EXECUTIVE_EMAIL}" ] || \
            [ -z "$${EXECUTIVE_DISPLAY_NAME}" ] || \
            [ -z "$${EXECUTIVE_ENTERPRISE_SLUG}" ]; then
           echo "executive identity and enterprise fields are required" >&2
-          exit 64
+          exit 70
         fi
-        set -- python -m executive_ai_api.cli create-user \
+        set -- python -m api.cli create-user \
           --enterprise-slug "$${EXECUTIVE_ENTERPRISE_SLUG}" \
           --email "$${EXECUTIVE_EMAIL}" \
           --display-name "$${EXECUTIVE_DISPLAY_NAME}" \
@@ -502,9 +467,7 @@ services:
     environment:
       POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER:-executive_ai_backup}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
-      POSTGRES_BACKUP_PASSWORD_FILE: /run/secrets/postgres_backup_password
-    secrets:
-      - postgres_backup_password
+      POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD:?POSTGRES_BACKUP_PASSWORD is required}
     volumes:
       - ./deploy/postgres/backup-entrypoint.sh:/usr/local/bin/backup-entrypoint:ro
     networks:
@@ -528,25 +491,3 @@ networks:
 volumes:
   postgres_data:
   file_data:
-
-secrets:
-  postgres_password:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/postgres_password
-  postgres_migrator_password:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/postgres_migrator_password
-  postgres_runtime_password:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/postgres_runtime_password
-  postgres_backup_password:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/postgres_backup_password
-  session_secret:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/session_secret
-  csrf_secret:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/csrf_secret
-  file_encryption_key:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/file_encryption_key
-  file_encryption_key_ring:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/file_encryption_key_ring
-  audit_hmac_key:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/audit_hmac_key
-  audit_hmac_key_ring:
-    file: ${RUNTIME_DIR:?RUNTIME_DIR is required}/secrets/audit_hmac_key_ring

@@ -8,7 +8,7 @@
 
 Phase 1 的目标是把分散在 5 个地方的运行时配置收口到
 `backend/configs/` 单一事实源。本次提交**只搭框架**，不破坏
-现有 `backend/src/executive_ai_api/config.py:Settings` 的运行行为。
+现有 `backend/src/api/config.py:Settings` 的运行行为。
 
 ## 已完成（本次 commit）
 
@@ -37,7 +37,7 @@ Phase 1 的目标是把分散在 5 个地方的运行时配置收口到
    - 叠加 secret 文件路径（不读 secret 内容）
    - 跑 `AppConfig.model_validator` 启动护栏
    - 返回 `AppConfig` 实例
-3. **改 `backend/src/executive_ai_api/config.py`**：把 `Settings`
+3. **改 `backend/src/api/config.py`**：把 `Settings`
    改为**薄壳**，从 `get_settings()` 调 `loader.load_active_profile()`。
    **保留相同 import path** 让所有 router 无需改
 4. **改 `compose.yml`**：删 8+ 个业务环境变量，改 `env_file:`
@@ -49,13 +49,13 @@ Phase 1 的目标是把分散在 5 个地方的运行时配置收口到
 7. **生成 `alembic-revision.txt` 的脚本**：`scripts/generate-configs.sh`
    在 alembic head 变化时自动更新 `configs/alembic-revision.txt`
 8. **容器入口前置 validate**：`backend/Dockerfile` 第一步
-   `python -m executive_ai_api.configs.loader --validate`
+   `python -m api.configs.loader --validate`
 9. **测试**：扩 `tests/test_config_validation.py` 覆盖 6 条护栏分支
 
 ## 风险评估
 
 - **本次 commit 风险低**：新文件不修改现有代码，
-  `backend/src/executive_ai_api/config.py` 仍正常工作
+  `backend/src/api/config.py` 仍正常工作
 - **后续 commit 风险中**：重写 `Settings` 委托需要仔细测试
   alembic + uvicorn 启动；如未完整迁移，可能出现
   Pydantic ValidationError
@@ -67,7 +67,7 @@ Phase 1 的目标是把分散在 5 个地方的运行时配置收口到
 - ✅ `python -c "from backend.configs import AppConfig, ProfileConfig"` 不会
   报错（schema 可 import）
 - ✅ `bash backend/scripts/check-config-drift.sh` 暂不会 fail（grep 路径不含业务 env var）
-- ⏸ `python -m executive_ai_api.configs.loader --validate` 当前返回 2
+- ⏸ `python -m api.configs.loader --validate` 当前返回 2
   （Phase 1 未完成占位）
 - ⏸ 后端 uvicorn 启动 + alembic upgrade head + 登录测试：未变更（应仍工作）
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 
@@ -6,9 +6,9 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from executive_ai_api.config import Settings
-from executive_ai_api.database import SessionLocal
-from executive_ai_api.models import AuditEvent, UserSession
+from configs.settings import Settings
+from api.database import SessionLocal
+from api.models import AuditEvent, UserSession
 
 from .conftest import NEW_PASSWORD, TEMP_PASSWORD, login
 

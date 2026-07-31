@@ -1,18 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 
-from executive_ai_api.audit_integrity import (
+from api.audit_integrity import (
     calculate_integrity_hash,
     verify_audit_chain,
     verify_audit_event,
 )
-from executive_ai_api.config import get_settings
-from executive_ai_api.database import SessionLocal
-from executive_ai_api.models import (
+from configs.settings import get_settings
+from api.database import SessionLocal
+from api.models import (
     AuditChainHead,
     AuditEvent,
     Conversation,

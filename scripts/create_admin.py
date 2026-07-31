@@ -28,13 +28,13 @@ from argparse import Namespace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-API_DIR = REPO_ROOT / "services" / "api"
+API_DIR = REPO_ROOT / "backend"
 API_SRC = API_DIR / "src"
 
 
 def parse_args() -> Namespace:
     parser = argparse.ArgumentParser(
-        description="Create the first enterprise administrator (re-uses executive_ai_api.cli.create_admin).",
+        description="Create the first enterprise administrator (re-uses api.cli.create_admin).",
     )
     parser.add_argument("--email", required=True, help="Login email for the new admin")
     parser.add_argument("--display-name", required=True, help="Display name shown in the UI")
@@ -62,7 +62,7 @@ def main() -> int:
     os.chdir(API_DIR)
     sys.path.insert(0, str(API_SRC))
 
-    from executive_ai_api.cli import create_admin  # noqa: E402  (import after path mutation)
+    from api.cli import create_admin  # noqa: E402  (import after path mutation)
 
     args = parse_args()
     # create_admin() reads the password from STDIN when password_stdin=True.

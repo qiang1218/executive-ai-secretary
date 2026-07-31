@@ -1,9 +1,28 @@
-#!/usr/bin/env bash
-set -euo pipefail
+# shellcheck shell=bash
+# runtime.sh — helper functions for the executive-ai-secretary dev/ops scripts.
+#
+# The repository now stores every secret in `backend/.env` (Pydantic Settings
+# picks it up automatically).  This file exposes:
+#
+#   * repo_path_resolution helpers
+#   * compose / docker command wrappers
+#   * preflight checks (env file presence, required CLI tools)
+#   * backup-key-file preflight for the 3 openssl key files that the backup
+#     tooling needs at fixed paths
+#
+# Shell scripts MUST source this file from a known path:
+#   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#   # shellcheck source=scripts/lib/runtime.sh
+#   . "${SCRIPT_DIR}/lib/runtime.sh"
+#
+# NEVER put any secret value in this file. It is shipped in the repository.
 
 SCRIPT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_LIB_DIR}/../.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/compose.yml"
+BACKEND_DIR="${REPO_ROOT}/backend"
+BACKEND_ENV_FILE="${BACKEND_DIR}/.env"
+RUNTIME_DIR="${REPO_ROOT}/runtime"
 
 die() {
   printf 'Error: %s\n' "$*" >&2
@@ -26,27 +45,25 @@ validate_environment_name() {
 }
 
 runtime_dir_for() {
-  printf '%s/runtime/%s' "${REPO_ROOT}" "$1"
+  printf '%s/%s' "${RUNTIME_DIR}" "$1"
 }
 
-env_file_for() {
-  printf '%s/.env' "$(runtime_dir_for "$1")"
+backup_key_dir_for() {
+  printf '%s/%s/secrets' "${RUNTIME_DIR}" "$1"
 }
 
 load_runtime_environment() {
   local environment="$1"
-  local env_file
   validate_environment_name "${environment}"
-  env_file="$(env_file_for "${environment}")"
-  [ -f "${env_file}" ] || die "${env_file} is missing; run ./scripts/prepare-env.sh ${environment} first"
+
+  [ -f "${BACKEND_ENV_FILE}" ] || die "${BACKEND_ENV_FILE} is missing; copy backend/.env.example and fill in the secrets"
 
   set -a
-  # The generated file contains non-secret deployment settings only.
   # shellcheck disable=SC1090
-  . "${env_file}"
+  . "${BACKEND_ENV_FILE}"
   set +a
 
-  [ "${APP_ENV:-}" = "${environment}" ] || die "APP_ENV in ${env_file} does not match ${environment}"
+  [ "${APP_ENV:-}" = "${environment}" ] || die "APP_ENV in ${BACKEND_ENV_FILE} does not match ${environment}"
   [ "${HOST_BIND:-}" = "127.0.0.1" ] || die "phase 1 permits only HOST_BIND=127.0.0.1"
   case "${COMPOSE_PROJECT_NAME:-}" in
     executive-ai-local-demo|executive-ai-customer-template) ;;
@@ -58,7 +75,7 @@ load_runtime_environment() {
     [ "${SEED_DEMO_DATA:-}" = "false" ] || die "customer-template refuses SEED_DEMO_DATA=${SEED_DEMO_DATA:-unset}"
   fi
 
-  export RUNTIME_DIR="./runtime/${environment}"
+  export RUNTIME_DIR BACKEND_DIR
 }
 
 compose() {
@@ -67,18 +84,18 @@ compose() {
   load_runtime_environment "${environment}"
   docker compose \
     --project-name "${COMPOSE_PROJECT_NAME}" \
-    --env-file "$(env_file_for "${environment}")" \
+    --env-file "${BACKEND_ENV_FILE}" \
     --file "${COMPOSE_FILE}" \
     "$@"
 }
 
-require_secret_files() {
+require_backup_key_files() {
   local environment="$1"
-  local secrets_dir
+  local key_dir
   local name
-  secrets_dir="$(runtime_dir_for "${environment}")/secrets"
-  for name in postgres_password postgres_migrator_password postgres_runtime_password postgres_backup_password session_secret csrf_secret file_encryption_key file_encryption_key_ring audit_hmac_key audit_hmac_key_ring backup_encryption_key backup_signing_key backup_signing_public_key; do
-    [ -s "${secrets_dir}/${name}" ] || die "missing secret: ${secrets_dir}/${name}; rerun prepare-env"
+  key_dir="$(backup_key_dir_for "${environment}")"
+  for name in backup_encryption_key backup_signing_key backup_signing_public_key; do
+    [ -s "${key_dir}/${name}" ] || die "missing backup key: ${key_dir}/${name}; generate with openssl genpkey or ed25519 and place the file at this path"
   done
 }
 

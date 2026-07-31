@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import uuid
 from typing import Annotated
@@ -15,7 +15,7 @@ from ..authz import (
     build_scope_snapshot,
     get_executive_principal,
 )
-from ..config import get_settings
+from configs.settings import get_settings
 from ..database import get_db
 from ..errors import AppError
 from ..idempotency import replay, save_response

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import hmac
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from .config import get_settings
+from configs.settings import get_settings
 from .models import AuditChainHead, AuditEvent, DataScopeGrant, User
 
 AUDIT_GENESIS_HASH = "0" * 64

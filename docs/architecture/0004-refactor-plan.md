@@ -40,7 +40,7 @@
 - 通过 `app/page.tsx` ↔ `app/page.production.tsx` 双入口；CI / Docker 用文件覆盖切换。
 - 前端 dev 用 `vinext`（Next.js on Vite on Cloudflare 适配），生产用 `vinext` 的 `startProdServer` + 自定义 `web-server.mjs`。
 - 后端是 FastAPI + SQLAlchemy 2.0 同步 + PostgreSQL 17 + Alembic。
-- 任务层是 `executive_ai_worker` 单进程轮询（lease + heartbeat + retry），没有真正的分布式调度。
+- 任务层是 `worker` 单进程轮询（lease + heartbeat + retry），没有真正的分布式调度。
 
 ### 1.3 已落地的"好东西"（保留不动）
 
@@ -134,7 +134,7 @@
 executive-ai-secretary/
 ├── backend/                          # 全部后端代码（替换 services/）
 │   ├── src/
-│   │   └── executive_ai_api/         # 详见 §3.3
+│   │   └── api/         # 详见 §3.3
 │   ├── src/worker/                   # 任务 worker（合并入 backend，详见 §4.5）
 │   ├── tests/
 │   ├── alembic/
@@ -272,10 +272,10 @@ executive-ai-secretary/
 | `app/` | `frontend/app/` + `frontend/src/`（拆分） |
 | `app/production/` | `frontend/src/features/` + `frontend/src/data/` + `frontend/src/auth/` |
 | `app/globals.css` | `frontend/src/styles/globals.css`（**原样不动**） |
-| `app/prototype-data.ts` | 删除；其内容迁移到 `backend/src/executive_ai_api/seed/sanitized_fixtures.py` |
+| `app/prototype-data.ts` | 删除；其内容迁移到 `backend/src/api/seed/sanitized_fixtures.py` |
 | `build/sites-vite-plugin.ts` | `frontend/scripts/sites-vite-plugin.ts` 或并入 `vite.config.ts` |
 | `db/`, `drizzle/` | 删除（Drizzle 在生产中未启用） |
-| `services/api/` | `backend/src/executive_ai_api/` |
+| `services/api/` | `backend/src/api/` |
 | `services/worker/` | `backend/src/worker/`（合并入同一 Python 包） |
 | `deploy/nginx/` | `backend/deploy/nginx/`（API / Web 共用反代） |
 | `deploy/postgres/` | `backend/deploy/postgres/` |
@@ -337,7 +337,7 @@ frontend/
 ### 3.3 后端目标架构（Clean-ish 三层 + 领域）
 
 ```
-backend/src/executive_ai_api/
+backend/src/api/
 ├── main.py                           # 仅 FastAPI app 装配 + lifespan
 ├── core/
 │   ├── config.py                     # 委托给 backend/configs/schema.py
@@ -505,7 +505,7 @@ class AppConfig(BaseModel):
 **启动护栏**：
 
 - `AppConfig.model_validator(mode="after")` 统一做"生产环境拒绝默认密钥/演示种子/Debug" 等所有护栏。
-- 容器入口（`backend/Dockerfile`）第一步执行 `python -m executive_ai_api.configs.loader --validate`，失败直接拒绝启动。
+- 容器入口（`backend/Dockerfile`）第一步执行 `python -m api.configs.loader --validate`，失败直接拒绝启动。
 - `compose.yml` 改为通过 `env_file: backend/deploy/environments/<env>.env` 注入，**不再在 compose 顶层定义业务环境变量**。
 
 ### 4.2 错误协议
@@ -558,7 +558,7 @@ class JobHandler(Protocol):
 
 未注册的 `job_type` 会被 `enqueue` 阶段直接拒绝（**而不是被 worker 抛 `integration_not_configured` 才发现**）。
 
-Worker **合并入** `backend/src/executive_ai_worker/`，单仓库多 Python 进程，部署阶段仍可拆为独立容器（同一镜像不同 `SERVICE_ROLE=worker`）。
+Worker **合并入** `backend/src/worker/`，单仓库多 Python 进程，部署阶段仍可拆为独立容器（同一镜像不同 `SERVICE_ROLE=worker`）。
 
 ### 4.6 权限模型
 
@@ -604,7 +604,7 @@ def create_conversation(
    - `app/`, `build/`, `db/`, `drizzle/`, `deploy/web-server.mjs`, `Dockerfile.web`, `next.config.ts`, `vite.config.ts`, `tsconfig.json`, `package.json`, `eslint.config.mjs`, `postcss.config.mjs` 原样迁入。
    - `globals.css` 整体迁入 `frontend/src/styles/globals.css`，**原样不动**。
 3. `backend/` 平移：
-   - `services/api/` → `backend/src/executive_ai_api/`
+   - `services/api/` → `backend/src/api/`
    - `services/worker/` → `backend/src/worker/`
    - `deploy/postgres/`、`deploy/nginx/`、`deploy/environments/` → `backend/deploy/`
 4. `shared/` 初始空架子（`api-contracts/`、`domain/`）。
@@ -628,7 +628,7 @@ def create_conversation(
 3. 删除 `compose.yml` 中所有业务环境变量定义，改为 `env_file:` 指向 `backend/deploy/environments/<env>.env`。
 4. `routers/health.py` 的 `EXPECTED_DATABASE_REVISION` 改为读 `ApiConfig.expected_alembic_revision`（由 `scripts/generate-configs.sh` 在 head 变化时自动写回）。
 5. **启动护栏统一**到 `AppConfig.model_validator`，删除分散在 `Settings` 内的护栏。
-6. 容器入口 `exec` 前置 `python -m executive_ai_api.configs.loader --validate`。
+6. 容器入口 `exec` 前置 `python -m api.configs.loader --validate`。
 7. 写 `backend/configs/README.md` 列出"如何新增环境变量 / 改默认"流程。
 8. `backend/scripts/check-config-drift.sh`：扫描 `compose.yml` 中残留业务环境变量，CI 阶段失败即拒绝合并。
 

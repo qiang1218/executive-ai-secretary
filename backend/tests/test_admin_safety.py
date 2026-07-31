@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from executive_ai_api.database import SessionLocal
-from executive_ai_api.models import Enterprise, OrganizationUnit, User
+from api.database import SessionLocal
+from api.models import Enterprise, OrganizationUnit, User
 
 from .conftest import login
 

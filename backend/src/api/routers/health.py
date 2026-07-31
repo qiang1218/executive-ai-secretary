@@ -6,13 +6,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..config import Settings, get_settings
+from configs.settings import Settings, get_settings
 from ..database import get_db
 from ..errors import AppError
 from ..storage import LocalEncryptedStorage
 
 router = APIRouter(tags=["health"])
-EXPECTED_DATABASE_REVISION = "c5d91f4a8b72"
 
 
 @router.get("/health/live", include_in_schema=False)
@@ -25,13 +24,14 @@ def ready(
     db: Annotated[Session, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, str]:
+    expected_revision = settings.expected_alembic_revision
     try:
         db.execute(text("SELECT 1"))
         if db.bind is not None and db.bind.dialect.name != "sqlite":
             revision = db.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
-            if revision != EXPECTED_DATABASE_REVISION:
+            if revision != expected_revision:
                 raise RuntimeError(
-                    f"database revision {revision!r} does not match {EXPECTED_DATABASE_REVISION}"
+                    f"database revision {revision!r} does not match {expected_revision}"
                 )
         storage = LocalEncryptedStorage(
             settings.file_storage_root,
@@ -44,6 +44,6 @@ def ready(
     return {
         "status": "ready",
         "database": "ok",
-        "database_revision": EXPECTED_DATABASE_REVISION,
+        "database_revision": expected_revision,
         "storage": "encrypted-round-trip-ok",
     }

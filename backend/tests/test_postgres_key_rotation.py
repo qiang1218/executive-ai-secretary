@@ -11,10 +11,10 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
-from executive_ai_api.database import Base
-from executive_ai_api.file_key_rotation import ROTATION_ADVISORY_LOCK, rotate_file_keys
-from executive_ai_api.models import Enterprise, FileAsset, User
-from executive_ai_api.storage import LocalEncryptedStorage
+from api.database import Base
+from api.file_key_rotation import ROTATION_ADVISORY_LOCK, rotate_file_keys
+from api.models import Enterprise, FileAsset, User
+from api.storage import LocalEncryptedStorage
 
 
 @pytest.mark.postgres

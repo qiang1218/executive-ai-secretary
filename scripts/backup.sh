@@ -13,7 +13,7 @@ case "${label}" in
 esac
 require_command docker
 require_command openssl
-require_secret_files "${environment}"
+require_backup_key_files "${environment}"
 load_runtime_environment "${environment}"
 
 compose "${environment}" ps --services --filter status=running | grep -qx postgres \

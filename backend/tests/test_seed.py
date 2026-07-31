@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 from sqlalchemy import func, select
 
-from executive_ai_api import seed as seed_module
-from executive_ai_api.database import SessionLocal
-from executive_ai_api.models import AppConfig, Conversation, Message, Report, UserCredential
+from api import seed as seed_module
+from api.database import SessionLocal
+from api.models import AppConfig, Conversation, Message, Report, UserCredential
 
 
 def test_demo_seed_requires_existing_identity_and_is_idempotent(monkeypatch, seeded) -> None:

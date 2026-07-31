@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import hashlib
@@ -15,31 +15,32 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from executive_ai_api import audit_integrity
-from executive_ai_api.audit_integrity import (
+from api import audit_integrity
+from api.audit_integrity import (
     calculate_integrity_hash,
     canonical_payload,
     verify_audit_chain,
     verify_audit_event,
 )
-from executive_ai_api.backup_evidence import verify_backup_evidence
-from executive_ai_api.config import Settings, get_settings
-from executive_ai_api.database import SessionLocal
-from executive_ai_api.errors import AppError
-from executive_ai_api.file_key_rotation import rotate_file_keys, verify_file_key_version
-from executive_ai_api.models import (
+from api.backup_evidence import verify_backup_evidence
+from configs.settings import Settings, get_settings
+from api.database import SessionLocal
+from api.errors import AppError
+from api.file_key_rotation import rotate_file_keys, verify_file_key_version
+from api.models import (
     AuditChainHead,
     AuditEvent,
     FileAsset,
     FileEvent,
 )
-from executive_ai_api.storage import MAGIC_V1, LocalEncryptedStorage
+from api.storage import MAGIC_V1, LocalEncryptedStorage
 
 
 def encoded_key(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only chmod semantics")
 def test_settings_load_current_and_historical_keys_without_database_storage(tmp_path) -> None:
     file_ring = tmp_path / "file-ring.json"
     file_ring.write_text(json.dumps({"v1": encoded_key(b"O" * 32)}), encoding="utf-8")
@@ -61,6 +62,7 @@ def test_settings_load_current_and_historical_keys_without_database_storage(tmp_
 
     os.chmod(file_ring, 0o644)
     with pytest.raises(RuntimeError, match="group or others"):
+        _ = settings.file_encryption_keys()
         settings.file_encryption_keys()
 
 

@@ -17,8 +17,8 @@ os.environ.update(
 )
 
 import pytest
-from executive_ai_api.database import Base
-from executive_ai_api.models import (
+from api.database import Base
+from api.models import (
     DataScopeGrant,
     Enterprise,
     Job,
@@ -29,7 +29,7 @@ from executive_ai_api.models import (
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from executive_ai_worker import main as worker
+from worker import main as worker
 
 
 @pytest.mark.postgres

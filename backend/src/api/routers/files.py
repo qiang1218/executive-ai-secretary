@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import uuid
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..audit import record_audit
 from ..authz import Principal, get_executive_principal
-from ..config import Settings, get_settings
+from configs.settings import Settings, get_settings
 from ..database import get_db
 from ..errors import AppError
 from ..models import FileAsset, FileEvent

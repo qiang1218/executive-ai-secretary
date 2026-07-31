@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import uuid
@@ -15,7 +15,7 @@ from ..authz import (
     get_executive_principal,
     scope_snapshot_is_current_for_user,
 )
-from ..config import get_settings
+from configs.settings import get_settings
 from ..database import get_db
 from ..errors import AppError
 from ..job_state import close_assistant_placeholder

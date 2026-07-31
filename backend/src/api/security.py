@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import hmac
@@ -14,7 +14,7 @@ from typing import Protocol
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
-from .config import Settings
+from configs.settings import Settings
 from .errors import AppError
 
 password_hasher = PasswordHasher(

@@ -19,7 +19,7 @@
 
 ```
 backend/
-├── src/{executive_ai_api, worker}
+├── src/{api, worker}
 ├── alembic/versions
 ├── deploy/{compose, postgres, nginx, environments}
 ├── scripts, configs, docs, tests
@@ -42,7 +42,7 @@ shared/
 
 | 现状 | 目标 | 备注 |
 |---|---|---|
-| `services/api/src/executive_ai_api/` | `backend/src/executive_ai_api/` | 全部 py 文件 |
+| `services/api/src/api/` | `backend/src/api/` | 全部 py 文件 |
 | `services/api/alembic/` | `backend/alembic/` | 含 `env.py` `versions/*.py` |
 | `services/api/alembic.ini` | `backend/alembic.ini` | |
 | `services/api/pyproject.toml` | `backend/pyproject.toml` | |
@@ -142,11 +142,11 @@ backend/configs/
 ```
 
 **改动**：
-- `backend/src/executive_ai_api/config.py` 改为薄壳，委托给 `backend/configs/schema.py`
+- `backend/src/api/config.py` 改为薄壳，委托给 `backend/configs/schema.py`
 - 启动护栏统一到 `AppConfig.model_validator`
 - `compose.yml` 业务环境变量删除，改 `env_file: backend/deploy/environments/<env>.env`
 - `routers/health.py` 的 `EXPECTED_DATABASE_REVISION` 改读 config
-- 容器入口前置 `python -m executive_ai_api.configs.loader --validate`
+- 容器入口前置 `python -m api.configs.loader --validate`
 - 新建 `backend/scripts/check-config-drift.sh`
 
 ## 当前 git 状态
@@ -179,7 +179,7 @@ untracked:  services/api/.env  services/api/local.db  services/api/.runtime/  �
 
 ## 不在本 PR 范围（按用户决定）
 
-- `app/prototype-data.ts`（667 行）— 下个 PR 迁到 `backend/src/executive_ai_api/seed/sanitized_fixtures.py`
+- `app/prototype-data.ts`（667 行）— 下个 PR 迁到 `backend/src/api/seed/sanitized_fixtures.py`
 - Phase 2 跨端契约
 - Phase 3 前端结构拆分
 - Phase 4 后端分层

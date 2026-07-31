@@ -30,11 +30,12 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/executive_ai_api", "src/worker/executive_ai_worker"]
+packages = ["src/configs", "src/api", "src/worker"]
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers --disable-warnings"
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
   "postgres: requires a real PostgreSQL database and exercises database concurrency semantics",
 ]

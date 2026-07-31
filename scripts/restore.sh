@@ -15,7 +15,7 @@ validate_environment_name "${environment}"
   || die "destructive operation; confirm with: '$0 ${environment} ${backup_dir} RESTORE ${environment}'"
 require_command docker
 require_command openssl
-require_secret_files "${environment}"
+require_backup_key_files "${environment}"
 load_runtime_environment "${environment}"
 
 manifest_file="${backup_dir}/manifest.env"
@@ -42,7 +42,7 @@ backup_revision="$(manifest_value alembic_revision)"
 info "Checking that backup revision ${backup_revision} can upgrade on this release..."
 supported_head="$(
   compose "${environment}" run --rm --no-deps -T migrate \
-    python -m executive_ai_api.migration_compatibility -- "${backup_revision}"
+    python -m api.migration_compatibility -- "${backup_revision}"
 )"
 [ -n "${supported_head}" ] || die "migration compatibility check returned no supported head"
 

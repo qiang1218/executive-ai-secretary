@@ -1,13 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from executive_ai_api import models  # noqa: F401
-from executive_ai_api.config import get_settings
-from executive_ai_api.database import Base
+from api import models  # noqa: F401
+from configs.settings import get_settings
+from api.database import Base
 
 config = context.config
 if config.config_file_name is not None:

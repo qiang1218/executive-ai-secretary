@@ -14,7 +14,6 @@ printf '%s' "${enterprise_slug}" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$' \
   || die "enterprise slug is invalid"
 [ "${confirmation}" = "SEED local-demo/${enterprise_slug}" ] \
   || die "confirm explicitly: $0 local-demo ${enterprise_slug} 'SEED local-demo/${enterprise_slug}'"
-require_secret_files "${environment}"
 
 DEMO_ENTERPRISE_SLUG="${enterprise_slug}" \
   compose "${environment}" --profile demo-seed run --rm seed-demo

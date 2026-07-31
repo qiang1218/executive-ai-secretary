@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from executive_ai_api.migration_compatibility import (
+from api.migration_compatibility import (
     IncompatibleMigrationError,
     _default_config_path,
     supported_upgrade_head,
 )
-from executive_ai_api.routers.health import EXPECTED_DATABASE_REVISION
+from configs.settings import get_settings
+
+# Mirrors configs.settings.Settings.expected_alembic_revision default.
+# Update both together when a new alembic head is added.
+EXPECTED_DATABASE_REVISION = get_settings().expected_alembic_revision
 
 
 @pytest.mark.parametrize(

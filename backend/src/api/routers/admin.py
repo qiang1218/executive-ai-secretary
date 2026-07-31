@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import uuid
 from typing import Annotated
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..audit import record_audit
 from ..audit_integrity import verify_audit_chain
 from ..authz import Principal, require_roles
-from ..config import Settings, get_settings
+from configs.settings import Settings, get_settings
 from ..database import get_db
 from ..errors import AppError
 from ..models import (

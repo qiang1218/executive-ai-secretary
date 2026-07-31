@@ -12,17 +12,17 @@ from fastapi import Request
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from executive_ai_api.authz import Principal
-from executive_ai_api.database import Base
-from executive_ai_api.idempotency import replay, save_response
-from executive_ai_api.models import (
+from api.authz import Principal
+from api.database import Base
+from api.idempotency import replay, save_response
+from api.models import (
     Enterprise,
     IdempotencyRecord,
     Project,
     User,
     UserSession,
 )
-from executive_ai_api.security import utc_now
+from api.security import utc_now
 
 
 def _request(key: str) -> Request:

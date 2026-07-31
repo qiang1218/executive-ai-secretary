@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -6,7 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from .backup_evidence import verify_backup_evidence
-from .config import get_settings
+from configs.settings import get_settings
 from .database import SessionLocal
 from .file_key_rotation import rotate_file_keys, verify_file_key_version
 from .storage import LocalEncryptedStorage

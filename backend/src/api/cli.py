@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import getpass
@@ -6,7 +6,7 @@ import sys
 
 from sqlalchemy import select
 
-from .config import get_settings
+from configs.settings import get_settings
 from .database import SessionLocal
 from .models import (
     AuditEvent,

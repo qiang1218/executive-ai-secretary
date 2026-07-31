@@ -11,7 +11,7 @@ from starlette.responses import Response
 
 from .logging_config import request_id_context
 
-logger = logging.getLogger("executive_ai_api.access")
+logger = logging.getLogger("api.access")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,80}$")
 
 

@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
-from executive_ai_api.config import get_settings
+from configs.settings import get_settings
 
 from .conftest import login, login_and_change_password
 

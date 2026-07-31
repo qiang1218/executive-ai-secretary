@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 
-from .config import get_settings
+from configs.settings import get_settings
 from .database import SessionLocal
 from .models import (
     AppConfig,

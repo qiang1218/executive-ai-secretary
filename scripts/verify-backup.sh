@@ -10,7 +10,7 @@ backup_dir="${2:-}"
 validate_environment_name "${environment}"
 [ -d "${backup_dir}" ] || die "backup directory not found: ${backup_dir:-unset}"
 require_command openssl
-require_secret_files "${environment}"
+require_backup_key_files "${environment}"
 load_runtime_environment "${environment}"
 
 manifest_file="${backup_dir}/manifest.env"

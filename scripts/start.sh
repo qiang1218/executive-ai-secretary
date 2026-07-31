@@ -8,7 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 environment="${1:-}"
 validate_environment_name "${environment}"
 require_command docker
-require_secret_files "${environment}"
 load_runtime_environment "${environment}"
 
 info "Starting ${environment}; the only host listener will be 127.0.0.1:${HTTP_PORT}."

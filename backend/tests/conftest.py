@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import shutil
@@ -20,23 +20,29 @@ os.environ.update(
         "LOGIN_MAX_ATTEMPTS": "100",
     }
 )
+# Pin Settings(env_file=".env") to a deterministic test value so the
+# developer's local .env (which carries the deployment-time FILE_STORAGE_ROOT)
+# doesn't override the per-process tempdir that the tests need to wipe.
 _storage_root = tempfile.mkdtemp(prefix="executive-ai-api-tests-")
-os.environ["STORAGE_ROOT"] = _storage_root
+os.environ["FILE_STORAGE_ROOT"] = _storage_root
+# An empty FILE_ENCRYPTION_KEY_RING skips the JSON-decoded ring; the
+# settings layer falls back to FILE_ENCRYPTION_KEY for the current key.
+os.environ["FILE_ENCRYPTION_KEY"] = ""
 
 import pytest
 from fastapi.testclient import TestClient
 
-from executive_ai_api.config import get_settings
-from executive_ai_api.database import Base, SessionLocal, engine
-from executive_ai_api.main import app
-from executive_ai_api.models import (
+from configs.settings import get_settings
+from api.database import Base, SessionLocal, engine
+from api.main import app
+from api.models import (
     DataScopeGrant,
     Enterprise,
     OrganizationUnit,
     User,
     UserCredential,
 )
-from executive_ai_api.security import hash_password
+from api.security import hash_password
 
 TEMP_PASSWORD = "TempStrong!23456"
 NEW_PASSWORD = "NewStrong!23456"
