@@ -1,5 +1,7 @@
 import { ApiClient, apiClient, humanizeApiError } from "./api-client";
+import { adminServices, AdminServices } from "./admin-services";
 import type {
+  AdminBootstrap,
   AuthMe,
   AuthSession,
   Conversation,
@@ -195,34 +197,42 @@ export const productionServices = createProductionServices();
 
 export async function loadProductionBootstrap(
   services: ProductionServices = productionServices,
+  admin: AdminServices = adminServices,
 ): Promise<ProductionBootstrap> {
   const me = await services.auth.me();
+  const emptyBootstrap: ProductionBootstrap = {
+    me,
+    organizationUnits: [],
+    conversations: [],
+    projects: [],
+    memories: [],
+    reports: [],
+    jobs: [],
+    optionalErrors: {},
+  };
   if (me.user.password_change_required) {
-    return {
-      me,
-      organizationUnits: [],
-      conversations: [],
-      projects: [],
-      memories: [],
-      reports: [],
-      jobs: [],
-      optionalErrors: {},
-    };
+    return emptyBootstrap;
   }
 
   // Keep the executive workspace and its resources isolated from management
-  // sessions. Enterprise administrators and FDEs use separate APIs/surfaces.
+  // sessions. Enterprise administrators and FDEs never see conversations,
+  // memories, reports, jobs, or projects; they get a parallel management
+  // bootstrap with only the admin surfaces they are authorized for.
   if (me.user.role !== "executive") {
-    return {
-      me,
-      organizationUnits: [],
-      conversations: [],
-      projects: [],
-      memories: [],
-      reports: [],
-      jobs: [],
-      optionalErrors: {},
+    const [runtimeResult, unitsResult, usersResult] = await Promise.allSettled([
+      admin.runtime.get(),
+      admin.organizationUnits.list(),
+      admin.users.list(),
+    ]);
+    const adminBootstrap: AdminBootstrap = {
+      runtime: runtimeResult.status === "fulfilled" ? runtimeResult.value : null,
+      runtimeError: runtimeResult.status === "rejected" ? humanizeApiError(runtimeResult.reason) : null,
+      organizationUnits:
+        unitsResult.status === "fulfilled" ? unitsResult.value.items : [],
+      users: usersResult.status === "fulfilled" ? usersResult.value.items : [],
+      usersError: usersResult.status === "rejected" ? humanizeApiError(usersResult.reason) : null,
     };
+    return { ...emptyBootstrap, admin: adminBootstrap };
   }
 
   const [organizationsResult, conversationsResult, projectsResult] = await Promise.all([

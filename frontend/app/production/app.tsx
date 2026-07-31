@@ -11,8 +11,10 @@ import {
   loadProductionBootstrap,
   productionServices,
 } from "./services";
+import { AdminWorkspace, loadAdminBootstrap } from "./admin-shell";
 import { ProductionWorkspace } from "./workspace";
 import type {
+  AdminBootstrap,
   AuthMe,
   ProductionBootstrap,
 } from "./types";
@@ -105,15 +107,24 @@ export function ProductionApplication() {
     );
   }
   if (session.bootstrap.me.user.role !== "executive") {
+    const adminBootstrap: AdminBootstrap = session.bootstrap.admin ?? {
+      runtime: null,
+      runtimeError: null,
+      organizationUnits: [],
+      users: [],
+      usersError: null,
+    };
     return (
-      <ProductionStatus
-        title="管理身份已验证"
-        description="当前入口只服务高层本人。管理账号不会加载高层会话、记忆或文件正文；管理功能将通过独立受控入口开放。"
-        action="退出登录"
-        onAction={() => {
-          void productionServices.auth.logout().finally(() => {
+      <AdminWorkspace
+        me={session.bootstrap.me}
+        bootstrap={adminBootstrap}
+        onRefresh={loadAdminBootstrap}
+        onLogout={async () => {
+          try {
+            await productionServices.auth.logout();
+          } finally {
             setSession({ status: "anonymous" });
-          });
+          }
         }}
       />
     );
