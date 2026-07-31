@@ -5,10 +5,10 @@ import { resolveAppMode } from "../app/production/runtime.mjs";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
-test("production mode is explicit and invalid configuration fails closed", () => {
-  assert.equal(resolveAppMode(undefined), "demo");
-  assert.equal(resolveAppMode("demo"), "demo");
-  assert.equal(resolveAppMode(" production "), "production");
+test("production is the default and invalid configuration fails closed", () => {
+  assert.equal(resolveAppMode(undefined), "production");
+  assert.equal(resolveAppMode("production"), "production");
+  assert.equal(resolveAppMode(" demo "), "demo");
   assert.throws(() => resolveAppMode("prod"), /Invalid NEXT_PUBLIC_APP_MODE/);
 });
 

@@ -9,9 +9,10 @@ import { ProductionApplication } from "./production/app";
  * at render time by {@link appMode}, so demo and production code stay in
  * physically separate files and the build pipeline never rewrites source.
  *
- * - dev (default): renders the interactive prototype with seeded fixtures.
- * - `NEXT_PUBLIC_APP_MODE=production npm run dev`: renders the production
- *   application against the real backend API.
+ * - dev (default): renders the production application against the real
+ *   backend API.
+ * - `NEXT_PUBLIC_APP_MODE=demo npm run dev`: renders the interactive
+ *   prototype with seeded fixtures.
  * - Docker / CI: `NEXT_PUBLIC_APP_MODE=production` is hard-coded in
  *   `Dockerfile.web`, so production bundles never carry demo fixtures.
  */
