@@ -20,7 +20,7 @@
 2. 创建并自动校验一致性备份：
 
    ```bash
-   ./scripts/backup.sh local-demo key-rotation-v2
+   cd backend && uv run python scripts/backup.py --environment local-demo --label manual key-rotation-v2
    ```
 
 3. 记录脚本输出的绝对备份目录。轮换 CLI 会再次验证 Ed25519 清单签名、环境、时间、Alembic revision 及数据库/文件密文 SHA-256；缺少合格备份时拒绝执行。

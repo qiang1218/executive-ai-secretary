@@ -18,7 +18,7 @@
 4. 运行 `prepare-env.sh customer-template` 生成客户独立密钥，并将两个 release bundle 文件复制到 `runtime/customer-template/release/`。
 5. 在正式上线前增加 TLS 终止、反向代理信任范围和客户批准的监听地址；Phase 1 的 loopback guard 不能直接绕过。
 6. 安装 `cosign` 和 `jq`。从已验收 bundle 中把 `release.version`、`release.gitCommit`、`database.alembicHead` 和 `images` 六个完整值分别写入客户 `.env` 的 `RELEASE_VERSION`、`RELEASE_GIT_COMMIT`、`EXPECTED_ALEMBIC_HEAD`、`WEB_IMAGE`、`API_IMAGE`、`WORKER_IMAGE`、`POSTGRES_IMAGE`、`NGINX_IMAGE` 和 `FILE_TOOL_IMAGE`。不得抄写或截断 digest。
-7. 执行 `./scripts/start-release.sh customer-template`。脚本先验证 release bundle 的 Sigstore 签名、透明日志证据以及 GitHub OIDC 中的仓库、commit SHA、ref 和触发类型；再对六个镜像 digest 与 Alembic head 做逐项精确比对，并检查三个应用镜像签名的版本/commit/组件注解。任一字段不一致就会在拉取或迁移前停止。
+7. 执行 `(see docs/production/operations-runbook.md)`。脚本先验证 release bundle 的 Sigstore 签名、透明日志证据以及 GitHub OIDC 中的仓库、commit SHA、ref 和触发类型；再对六个镜像 digest 与 Alembic head 做逐项精确比对，并检查三个应用镜像签名的版本/commit/组件注解。任一字段不一致就会在拉取或迁移前停止。
 8. 交互创建首位企业管理员，配置组织与事业部范围。
 9. 执行安全、权限、备份恢复、日志和核心业务验收。
 

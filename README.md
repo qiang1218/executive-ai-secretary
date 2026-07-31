@@ -31,7 +31,7 @@ npm run dev
 ./scripts/start.sh local-demo
 ./scripts/bootstrap-admin.sh local-demo admin@example.com "企业管理员" "演示企业" demo-enterprise
 ./scripts/create-executive.sh local-demo demo-enterprise chairman@example.com "董事长" enterprise
-./scripts/seed-demo.sh local-demo demo-enterprise "SEED local-demo/demo-enterprise"
+cd backend && uv run python scripts/seed_demo.py --environment local-demo --enterprise-slug demo-enterprise --yes
 ./scripts/smoke-test.sh local-demo
 ```
 

@@ -7,7 +7,7 @@ git status --short --branch
 ./scripts/start.sh local-demo
 ./scripts/status.sh local-demo
 ./scripts/smoke-test.sh local-demo
-./scripts/backup.sh local-demo pre-demo
+cd backend && uv run python scripts/backup.py --environment local-demo --label manual pre-demo
 ```
 
 确认页面显示“本机脱敏演示环境”，不存在客户真实数据，且浏览器访问的是 `127.0.0.1:8080`。
@@ -52,7 +52,7 @@ Docker 日志默认单文件 10 MB、最多 5 个并压缩。结构化字段至�
 2. 完成并验证备份。
 3. 现场 Demo 可检出已审阅 commit；客户环境必须取得受保护发布 Job 产生的 `release-bundle.json` 与 `release-bundle.sigstore.json`，记录 Workflow Run URL 和审批人。
 4. 将 bundle 中的版本、commit、Alembic head 和六个镜像 digest 逐项写入客户 `.env`，由第二人核对；禁止使用 Tag 或从不同 bundle 复制值。
-5. Demo 执行 `./scripts/start.sh local-demo`；客户环境执行 `./scripts/start-release.sh customer-template`。两条路径都按角色初始化、迁移、权限重放、常驻服务的顺序启动，客户路径会先验证签名 bundle 与镜像签名，并额外拒绝源码构建。
+5. Demo 执行 `./scripts/start.sh local-demo`；客户环境执行 `(see docs/production/operations-runbook.md)`。两条路径都按角色初始化、迁移、权限重放、常驻服务的顺序启动，客户路径会先验证签名 bundle 与镜像签名，并额外拒绝源码构建。
 6. 执行 smoke test 和核心登录/会话/文件权限回归。
 7. 失败时根据迁移兼容性选择应用回滚或数据库恢复，不得盲目降级。
 

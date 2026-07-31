@@ -1,14 +1,19 @@
-#!/usr/bin/env python3
-"""Resolve the single Alembic head without importing migration code."""
+"""Resolve the single Alembic head without importing migration code.
+
+Replaces scripts/resolve-alembic-head.py and updates the migration-directory
+path to match the post-Phase-0 layout (backend/alembic/versions, not
+services/api/alembic/versions).
+"""
 
 from __future__ import annotations
 
+import argparse
 import ast
+import sys
 from pathlib import Path
 
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-VERSIONS_DIRECTORY = REPOSITORY_ROOT / "services" / "api" / "alembic" / "versions"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_VERSIONS = REPO_ROOT / "backend" / "alembic" / "versions"
 
 
 def literal_assignment(tree: ast.Module, name: str) -> object:
@@ -26,16 +31,18 @@ def literal_assignment(tree: ast.Module, name: str) -> object:
     raise ValueError(f"migration is missing a literal {name} assignment")
 
 
-def main() -> None:
+def resolve_head(versions_dir: Path) -> str:
     revisions: set[str] = set()
     parents: set[str] = set()
-    migration_files = sorted(VERSIONS_DIRECTORY.glob("*.py"))
+    migration_files = sorted(versions_dir.glob("*.py"))
     if not migration_files:
-        raise SystemExit("no Alembic migrations found")
+        raise SystemExit(f"no Alembic migrations found in {versions_dir}")
 
     for migration_file in migration_files:
         try:
-            tree = ast.parse(migration_file.read_text(encoding="utf-8"), migration_file.name)
+            tree = ast.parse(
+                migration_file.read_text(encoding="utf-8"), migration_file.name
+            )
             revision = literal_assignment(tree, "revision")
             down_revision = literal_assignment(tree, "down_revision")
         except (SyntaxError, ValueError) as exc:
@@ -60,8 +67,21 @@ def main() -> None:
     heads = sorted(revisions - parents)
     if len(heads) != 1:
         raise SystemExit(f"expected one Alembic head, found: {heads}")
-    print(heads[0])
+    return heads[0]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--versions-dir",
+        type=Path,
+        default=DEFAULT_VERSIONS,
+        help=f"Path to the Alembic versions directory (default: {DEFAULT_VERSIONS}).",
+    )
+    args = parser.parse_args(argv)
+    print(resolve_head(args.versions_dir))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

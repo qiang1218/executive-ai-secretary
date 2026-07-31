@@ -19,8 +19,8 @@
 ## 创建并验证
 
 ```bash
-./scripts/backup.sh local-demo
-./scripts/backup.sh customer-template
+cd backend && uv run python scripts/backup.py --environment local-demo --label manual
+cd backend && uv run python scripts/backup.py --environment customer-template --label manual
 ```
 
 脚本在完成后自动执行校验：
@@ -33,7 +33,7 @@
 也可单独复核：
 
 ```bash
-./scripts/verify-backup.sh local-demo /absolute/path/to/backup
+cd backend && uv run python scripts/verify_backup.py --environment local-demo --backup-dir /absolute/path/to/backup
 ```
 
 仅有加密备份而没有对应 `backup_encryption_key` 无法恢复。生产备份应把密钥与数据备份存入不同受控介质。
@@ -43,7 +43,7 @@
 恢复会替换数据库对象与私有文件卷，必须提供精确二次确认：
 
 ```bash
-./scripts/restore.sh local-demo /absolute/path/to/backup "RESTORE local-demo"
+cd backend && uv run python scripts/restore.py --environment local-demo --backup-dir /absolute/path/to/backup --yes
 ```
 
 恢复脚本会先用当前 API 镜像读取 Alembic 迁移图；只有备份 revision 是当前唯一 head 的已知祖先时才会继续。通过前置门禁后，脚本自动创建 `pre-restore` 安全备份，随后停止 API/Worker、恢复数据库、把对象所有权交给 migrator、前向迁移到当前 head、重放最小权限、复核数据库 revision，最后才替换目标环境自身的文件卷并重新启动做健康检查。安全备份不会自动删除。

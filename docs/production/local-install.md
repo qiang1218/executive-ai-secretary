@@ -84,7 +84,7 @@ runtime/
 仅 `local-demo` 可执行，且必须提供精确确认短语：
 
 ```bash
-./scripts/seed-demo.sh local-demo demo-enterprise "SEED local-demo/demo-enterprise"
+cd backend && uv run python scripts/seed_demo.py --environment local-demo --enterprise-slug demo-enterprise --yes
 ```
 
 Seed 必须指向已经由管理员初始化、且已有 executive 的企业；它幂等写入脱敏事业部、项目、会话与简报样本，不读取或创建任何凭据。`customer-template` 在 Compose、脚本与应用三层均拒绝此操作。
