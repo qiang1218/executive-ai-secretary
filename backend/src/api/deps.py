@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from services.audit_service import AuditService
 from services.authz import (
     Principal,
     get_current_principal,
@@ -25,14 +26,25 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
 ExecutivePrincipalDep = Annotated[Principal, Depends(get_executive_principal)]
 
+
+def get_audit_service(session: SessionDep) -> AuditService:
+    """FastAPI dependency: instantiate ``AuditService`` with the request session."""
+    return AuditService(session)
+
+
+AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
+
 __all__ = [
     "SessionDep",
     "SettingsDep",
     "PrincipalDep",
     "ExecutivePrincipalDep",
+    "AuditServiceDep",
+    "AuditService",
     "Principal",
     "get_current_principal",
     "get_executive_principal",
+    "get_audit_service",
     "get_db",
     "get_settings",
     "Settings",

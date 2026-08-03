@@ -9,16 +9,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from repositories.audit import record_audit
+from services.audit_service import AuditService
 from services.authz import (
     Principal,
     build_scope_snapshot,
     get_executive_principal,
     scope_snapshot_is_current_for_user,
 )
+from api.deps import AuditServiceDep
 from configs.settings import get_settings
 from db.session import get_db
 from exceptions.errors import AppError
-from utils.job_state import close_assistant_placeholder
+from services.job_state import JobStateService
 from models import Conversation, FileAsset, Job, JobAttempt, Message, Report
 from schemas import JobCreate, JobOut, Page
 from core.security import utc_now
@@ -151,6 +153,7 @@ def cancel_job(
     request: Request,
     principal: Annotated[Principal, Depends(get_executive_principal)],
     db: Annotated[Session, Depends(get_db)],
+    audit: AuditServiceDep,
 ) -> JobOut:
     item = visible_job(db, principal, job_id, lock=True)
     if item.status not in {"queued", "running"}:
@@ -172,9 +175,8 @@ def cancel_job(
         attempt.status = "canceled"
         attempt.completed_at = item.completed_at
         attempt.error_message = "Canceled by user"
-    close_assistant_placeholder(db, item, status="failed", content="请求已取消")
-    record_audit(
-        db,
+    JobStateService(db).close_assistant_placeholder(item, status="failed", content="请求已取消")
+    audit.record(
         request,
         "job.canceled",
         actor=principal.user,

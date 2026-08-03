@@ -11,13 +11,15 @@ import importlib
 from typing import Any
 
 # 本地子模块
-_LOCAL = ("cli", "job_state")
+_LOCAL = ("cli",)
 # 物理位于 repositories 包的子模块
 _REPOSITORIES = (
     "personal_data_migration",
     "rotate_file_keys",
     "rotate_integration_keys",
 )
+# 物理位于 services 包的子模块（已 class 化）
+_SERVICES = ("job_state",)
 
 
 def __getattr__(name: str) -> Any:
@@ -25,9 +27,15 @@ def __getattr__(name: str) -> Any:
         return importlib.import_module(f"utils.{name}")
     if name in _REPOSITORIES:
         return importlib.import_module(f"repositories.{name}")
+    if name in _SERVICES:
+        return importlib.import_module(f"services.{name}")
     # 在子模块中查找符号
-    for sub_name in _LOCAL + _REPOSITORIES:
-        pkg = "utils" if sub_name in _LOCAL else "repositories"
+    for sub_name in _LOCAL + _REPOSITORIES + _SERVICES:
+        pkg = (
+            "utils" if sub_name in _LOCAL
+            else "repositories" if sub_name in _REPOSITORIES
+            else "services"
+        )
         try:
             sub = importlib.import_module(f"{pkg}.{sub_name}")
         except ImportError:
@@ -37,4 +45,4 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module 'utils' has no attribute {name!r}")
 
 
-__all__ = list(_LOCAL + _REPOSITORIES)
+__all__ = list(_LOCAL + _REPOSITORIES + _SERVICES)
