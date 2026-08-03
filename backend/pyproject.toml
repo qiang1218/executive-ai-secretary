@@ -36,6 +36,7 @@ packages = [
   "src/api",
   "src/configs",
   "src/core",
+  "src/db",
   "src/exceptions",
   "src/logs",
   "src/middleware",
