@@ -11,10 +11,9 @@ import {
   loadProductionBootstrap,
   productionServices,
 } from "./services";
-import { AdminWorkspace, loadAdminBootstrap } from "./admin-shell";
 import { ProductionWorkspace } from "./workspace";
+import { ProductionAdmin } from "./admin-shell";
 import type {
-  AdminBootstrap,
   AuthMe,
   ProductionBootstrap,
 } from "./types";
@@ -107,24 +106,11 @@ export function ProductionApplication() {
     );
   }
   if (session.bootstrap.me.user.role !== "executive") {
-    const adminBootstrap: AdminBootstrap = session.bootstrap.admin ?? {
-      runtime: null,
-      runtimeError: null,
-      organizationUnits: [],
-      users: [],
-      usersError: null,
-    };
     return (
-      <AdminWorkspace
+      <ProductionAdmin
         me={session.bootstrap.me}
-        bootstrap={adminBootstrap}
-        onRefresh={loadAdminBootstrap}
-        onLogout={async () => {
-          try {
-            await productionServices.auth.logout();
-          } finally {
-            setSession({ status: "anonymous" });
-          }
+        onLogout={() => {
+          void productionServices.auth.logout().finally(() => setSession({ status: "anonymous" }));
         }}
       />
     );
@@ -155,7 +141,7 @@ function ProductionStatus({
         <div className="login-statement">
           <p className="eyebrow">本机生产环境</p>
           <h1 id="production-status-title">可信经营服务正在准备。</h1>
-          <p>生产模式只读取已授权的企业数据，不会使用演示样本补位。</p>
+          <p>客户生产模式不会使用演示数据，只读取已授权的企业数据。</p>
         </div>
       </section>
       <section className="login-panel" aria-live="polite">
@@ -210,12 +196,12 @@ function ProductionLogin({
         <div className="login-statement">
           <p className="eyebrow">私有化经营工作入口</p>
           <h1 id="production-product-title">先确认身份，再进入经营现场。</h1>
-          <p>会话、文件与经营范围均受企业权限控制，并记录必要的安全审计。</p>
+          <p>会话、经营范围与工具调用均受企业权限控制，并记录必要的安全审计。</p>
         </div>
         <dl className="login-principles">
           <div><dt>01</dt><dd><strong>独立身份</strong><span>企业预建账号与受控会话</span></dd></div>
           <div><dt>02</dt><dd><strong>最小权限</strong><span>只展示已授权事业部</span></dd></div>
-          <div><dt>03</dt><dd><strong>真实数据</strong><span>生产模式不使用演示样本</span></dd></div>
+          <div><dt>03</dt><dd><strong>来源透明</strong><span>数据来源与截止时间清晰标注</span></dd></div>
         </dl>
       </section>
       <section className="login-panel" aria-labelledby="production-login-title">

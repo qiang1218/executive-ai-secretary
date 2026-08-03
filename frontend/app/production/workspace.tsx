@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ChangeEvent,
   FormEvent,
   KeyboardEvent,
   ReactNode,
@@ -12,14 +11,20 @@ import {
   useState,
 } from "react";
 import { ApiError, humanizeApiError } from "./api-client";
+import { AssistantOutputRenderer, parseAssistantOutput } from "./assistant-output";
 import { loadProductionBootstrap, productionServices } from "./services";
 import type {
+  AuthorizedModel,
   AuthMe,
   Conversation,
   ConversationMessage,
-  FileMetadata,
+  DataCapabilities,
+  DailyBrief,
+  ExecutivePersonalProfile,
+  Job,
   Memory,
   OrganizationUnit,
+  OrganizationScope,
   ProductionBootstrap,
   Project,
   Report,
@@ -30,6 +35,7 @@ type UiLanguage = "zh-CN" | "zh-TW" | "en";
 type WorkspacePanel = "daily" | "weekly" | "history" | "memory" | "scope";
 type PreferencesView = "profile" | "appearance" | "memory";
 type ProjectDialogState = { mode: "create" } | { mode: "edit"; projectId: string };
+type ConversationProjectDialogState = { conversationId: string };
 type SidebarMenuState =
   | { kind: "conversation"; conversationId: string; top: number }
   | { kind: "project"; projectId: string; top: number };
@@ -40,9 +46,22 @@ type ConfirmState = {
   tone?: "normal" | "danger";
   action: () => void | Promise<void>;
 };
-type ProfilePreferences = { salutation: string; amountUnit: string };
+type ProfilePreferences = {
+  salutation: string;
+  amountUnit: ExecutivePersonalProfile["amount_unit"];
+  responseStyle: ExecutivePersonalProfile["response_style"];
+};
+type DailyBriefLoadState = {
+  scopeKey: string;
+  status: "ready" | "loading" | "error";
+  data: DailyBrief | null;
+};
 
 const ALL_SCOPE_ID = "all";
+const ALL_ORGANIZATIONS_SCOPE: OrganizationScope = {
+  mode: "all_authorized",
+  organization_unit_ids: [],
+};
 const COMPOSER_MAX_LENGTH = 8000;
 const COMPOSER_HINT_THRESHOLD = COMPOSER_MAX_LENGTH * 0.8;
 
@@ -70,9 +89,7 @@ const copy = {
     profile: "个人资料",
     appearance: "外观",
     scope: "全部事业部",
-    file: "文件",
-    greetingQuestion: "今天需要我先看什么？",
-    placeholder: "向 AI 秘书提问经营数据，或上传当前会话文件",
+    placeholder: "向 AI 秘书提问经营数据，或讨论需要分析的问题",
     disclaimer: "AI 可能出错。关键经营数字请结合来源与数据时间核对。",
     noProject: "尚未创建项目",
     noConversation: "尚无历史会话",
@@ -96,9 +113,7 @@ const copy = {
     profile: "個人資料",
     appearance: "外觀",
     scope: "全部事業部",
-    file: "檔案",
-    greetingQuestion: "今天需要我先看什麼？",
-    placeholder: "向 AI 秘書提問經營資料，或上傳目前會話檔案",
+    placeholder: "向 AI 秘書提問經營資料，或討論需要分析的問題",
     disclaimer: "AI 可能出錯。關鍵經營數字請結合來源與資料時間核對。",
     noProject: "尚未建立項目",
     noConversation: "尚無歷史會話",
@@ -122,9 +137,7 @@ const copy = {
     profile: "Profile",
     appearance: "Appearance",
     scope: "All business units",
-    file: "File",
-    greetingQuestion: "What should I look into first?",
-    placeholder: "Ask about the business or upload a file for this conversation",
+    placeholder: "Ask about the business or discuss a question that needs analysis",
     disclaimer: "AI can make mistakes. Verify critical figures against sources and data timestamps.",
     noProject: "No projects yet",
     noConversation: "No conversations yet",
@@ -145,37 +158,189 @@ function environmentLabel(me: AuthMe) {
 
 function localizedDate(locale: string, timezone: string) {
   try {
-    return new Intl.DateTimeFormat(locale || "zh-CN", {
-      dateStyle: "full",
+    const resolvedLocale = locale || "zh-CN";
+    const formatter = new Intl.DateTimeFormat(resolvedLocale, {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      weekday: "long",
       timeZone: timezone || "Asia/Shanghai",
-    }).format(new Date());
+    });
+    if (!resolvedLocale.startsWith("zh")) return formatter.format(new Date());
+    const values = Object.fromEntries(formatter.formatToParts(new Date()).map((part) => [part.type, part.value]));
+    return `${values.year}年${values.month}月${values.day}日，${values.weekday}`;
   } catch {
     return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
   }
 }
 
-function greetingForCurrentHour(timezone: string, language: UiLanguage) {
-  let hour = new Date().getHours();
+type GreetingContext = "time" | "return" | "idle";
+type GreetingState = { context: GreetingContext; seed: string; observedAt: number };
+type PresenceRecord = { dateKey: string; lastSeenAt: number; returnCount: number };
+
+function zonedClock(timezone: string, now: Date = new Date()) {
+  let hour = now.getHours();
+  let dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   try {
-    const part = new Intl.DateTimeFormat("en-US", {
-      hour: "2-digit",
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
       hour12: false,
       timeZone: timezone || "Asia/Shanghai",
-    }).formatToParts(new Date()).find((item) => item.type === "hour")?.value;
-    if (part) hour = Number(part) % 24;
+    }).formatToParts(now);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    if (values.hour) hour = Number(values.hour) % 24;
+    if (values.year && values.month && values.day) dateKey = `${values.year}-${values.month}-${values.day}`;
   } catch {
     // Browser time is a safe display-only fallback.
   }
+  return { hour, dateKey };
+}
+
+function stableGreetingIndex(seed: string, size: number) {
+  let hash = 0;
+  for (const character of seed) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+  return Math.abs(hash) % Math.max(size, 1);
+}
+
+function timeGreeting(hour: number, language: UiLanguage, salutation: string) {
   if (language === "en") {
-    if (hour < 6) return "Good evening";
-    if (hour < 12) return "Good morning";
-    if (hour < 18) return "Good afternoon";
-    return "Good evening";
+    if (hour < 5 || hour >= 23) return `It is late, take care, ${salutation}`;
+    if (hour < 12) return `Good morning, ${salutation}`;
+    if (hour < 18) return `Good afternoon, ${salutation}`;
+    return `Good evening, ${salutation}`;
   }
-  if (hour < 6) return language === "zh-TW" ? "夜深了" : "夜深了";
-  if (hour < 12) return "早上好";
-  if (hour < 18) return "下午好";
-  return "晚上好";
+  if (hour < 5 || hour >= 23) return language === "zh-TW" ? `夜深了，${salutation}` : `夜深了，${salutation}`;
+  if (hour < 10) return language === "zh-TW" ? `早上好，${salutation}` : `早上好，${salutation}`;
+  if (hour < 13) return language === "zh-TW" ? `中午好，${salutation}` : `中午好，${salutation}`;
+  if (hour < 18) return language === "zh-TW" ? `下午好，${salutation}` : `下午好，${salutation}`;
+  return language === "zh-TW" ? `晚上好，${salutation}` : `晚上好，${salutation}`;
+}
+
+function contextualGreeting(state: GreetingState, timezone: string, language: UiLanguage, salutation: string) {
+  const { hour } = zonedClock(timezone, new Date(state.observedAt));
+  if (state.context === "time") return timeGreeting(hour, language, salutation);
+  if (language === "en") {
+    if (hour < 5 || hour >= 23) return `It is late, remember to rest, ${salutation}`;
+    const values = state.context === "idle"
+      ? [`You have worked hard, ${salutation}.`, `Take a moment to breathe, ${salutation}.`]
+      : [`Welcome back, ${salutation}.`, `Good to see you again, ${salutation}.`, `I missed you, ${salutation}.`];
+    return values[stableGreetingIndex(state.seed, values.length)];
+  }
+  const traditional = language === "zh-TW";
+  if (hour < 5 || hour >= 23) return traditional ? `夜深了，注意休息，${salutation}` : `夜深了，注意休息，${salutation}`;
+  const values = state.context === "idle"
+      ? traditional
+      ? [`工作辛苦了，${salutation}。`, `放鬆一下吧，${salutation}。`]
+      : [`工作辛苦了，${salutation}。`, `放松一下吧，${salutation}。`]
+    : traditional
+      ? [`歡迎回來，${salutation}！`, `${salutation} 回來了！`, `${salutation}，我很想你！`]
+      : [`欢迎回来，${salutation}！`, `${salutation} 回来了！`, `${salutation}，我很想你！`];
+  return values[stableGreetingIndex(state.seed, values.length)];
+}
+
+function readPresenceRecord(key: string): PresenceRecord | null {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key) || "null") as Partial<PresenceRecord> | null;
+    if (!value || typeof value.dateKey !== "string" || typeof value.lastSeenAt !== "number" || typeof value.returnCount !== "number") return null;
+    return { dateKey: value.dateKey, lastSeenAt: value.lastSeenAt, returnCount: value.returnCount };
+  } catch {
+    return null;
+  }
+}
+
+function useHumanGreeting(me: AuthMe, language: UiLanguage, salutation: string) {
+  const timezone = me.user.timezone || "Asia/Shanghai";
+  const [state, setState] = useState<GreetingState>(() => {
+    const now = Date.now();
+    if (typeof window === "undefined") return { context: "time", seed: "initial", observedAt: now };
+    const { dateKey } = zonedClock(timezone, new Date(now));
+    const previous = readPresenceRecord(`executive-workbench-presence:${me.user.id}`);
+    const returningToday = previous?.dateKey === dateKey;
+    const returnCount = returningToday ? previous.returnCount + 1 : 0;
+    return {
+      context: returningToday ? "return" : "time",
+      seed: `${me.user.id}:${dateKey}:${returnCount}`,
+      observedAt: now,
+    };
+  });
+  const stateRef = useRef(state);
+  const lastActivityAt = useRef<number | null>(null);
+  const hiddenAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    const userKey = me.user.id;
+    const presenceKey = `executive-workbench-presence:${userKey}`;
+    const now = Date.now();
+    const { dateKey } = zonedClock(timezone, new Date(now));
+    const previous = readPresenceRecord(presenceKey);
+    let returnCount = previous?.dateKey === dateKey ? previous.returnCount : 0;
+    if (previous?.dateKey === dateKey) returnCount += 1;
+    lastActivityAt.current = now;
+    window.localStorage.setItem(presenceKey, JSON.stringify({ dateKey, lastSeenAt: now, returnCount } satisfies PresenceRecord));
+
+    const rememberPresence = () => {
+      const timestamp = Date.now();
+      const currentDateKey = zonedClock(timezone, new Date(timestamp)).dateKey;
+      const current = readPresenceRecord(presenceKey);
+      window.localStorage.setItem(presenceKey, JSON.stringify({
+        dateKey: currentDateKey,
+        lastSeenAt: timestamp,
+        returnCount: current?.dateKey === currentDateKey ? current.returnCount : 0,
+      } satisfies PresenceRecord));
+    };
+    const showContext = (context: GreetingContext, timestamp: number) => {
+      const nextDateKey = zonedClock(timezone, new Date(timestamp)).dateKey;
+      const nextState: GreetingState = { context, seed: `${userKey}:${nextDateKey}:${context}:${Math.floor(timestamp / 300_000)}`, observedAt: timestamp };
+      stateRef.current = nextState;
+      setState(nextState);
+    };
+    const onVisibilityChange = () => {
+      const timestamp = Date.now();
+      if (document.visibilityState === "hidden") {
+        hiddenAt.current = timestamp;
+        rememberPresence();
+        return;
+      }
+      const elapsed = hiddenAt.current ? timestamp - hiddenAt.current : 0;
+      hiddenAt.current = null;
+      if (elapsed >= 45 * 60_000) showContext("idle", timestamp);
+      else if (elapsed >= 5 * 60_000) showContext("return", timestamp);
+      lastActivityAt.current = timestamp;
+    };
+    const onActivity = () => {
+      const timestamp = Date.now();
+      if (lastActivityAt.current !== null && timestamp - lastActivityAt.current >= 45 * 60_000) showContext("idle", timestamp);
+      lastActivityAt.current = timestamp;
+    };
+    const timer = window.setInterval(() => {
+      const timestamp = Date.now();
+      const currentDateKey = zonedClock(timezone, new Date(timestamp)).dateKey;
+      if (currentDateKey !== zonedClock(timezone, new Date(stateRef.current.observedAt)).dateKey) showContext("time", timestamp);
+      else if (document.visibilityState === "visible" && lastActivityAt.current !== null && timestamp - lastActivityAt.current >= 45 * 60_000 && stateRef.current.context !== "idle") showContext("idle", timestamp);
+      else setState((current) => ({ ...current, observedAt: timestamp }));
+    }, 60_000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("keydown", onActivity);
+    window.addEventListener("pagehide", rememberPresence);
+    return () => {
+      rememberPresence();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("pagehide", rememberPresence);
+    };
+  }, [me.user.id, timezone]);
+
+  return contextualGreeting(state, timezone, language, salutation);
 }
 
 function formatTimestamp(value: string | null | undefined, locale: string = "zh-CN") {
@@ -196,15 +361,62 @@ function formatDate(value: string, locale: string = "zh-CN") {
   return new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }).format(date);
 }
 
+function dailyBriefDataAsOf(brief: DailyBrief | null) {
+  return brief?.data_as_of ?? null;
+}
+
+function dailyBriefHeadline(brief: DailyBrief, language: UiLanguage) {
+  const uncertain = brief.readiness === "partial" || brief.readiness === "unavailable";
+  if (language === "en") {
+    if (uncertain && brief.attention_count === 0) return "There is not enough current data to make a determination";
+    if (uncertain) return `${brief.attention_count} item${brief.attention_count === 1 ? "" : "s"} identified for confirmation so far`;
+    return brief.attention_count > 0
+      ? `${brief.attention_count} item${brief.attention_count === 1 ? "" : "s"} need your attention today`
+      : "Nothing needs your confirmation today";
+  }
+  if (language === "zh-TW") {
+    if (uncertain && brief.attention_count === 0) return "目前數據不足，暫不能判斷";
+    if (uncertain) return `目前已識別 ${brief.attention_count} 項需要確認`;
+    return brief.attention_count > 0
+      ? `今日有 ${brief.attention_count} 項需要確認`
+      : "今日暫無需要確認的事項";
+  }
+  if (uncertain && brief.attention_count === 0) return "当前数据不足，暂不能判断";
+  if (uncertain) return `当前已识别 ${brief.attention_count} 项需要确认`;
+  return brief.attention_count > 0
+    ? `今日有 ${brief.attention_count} 项需要确认`
+    : "今日暂无需要确认的事项";
+}
+
+const domainLabels: Record<string, string> = {
+  opportunity: "商机",
+  delivery: "交付",
+  collection: "回款",
+  target: "目标",
+};
+
+function professionalSourceLabel(value: string | null | undefined) {
+  if (!value) return "经营数据源";
+  return value
+    .replaceAll("飞书经营三表", "飞书经营数据源")
+    .replaceAll("飞书三表", "飞书经营数据源")
+    .replaceAll("三表批次", "经营数据批次");
+}
+
+function dataStatusLabel(capabilities: DataCapabilities | null) {
+  if (!capabilities) return "数据状态待确认";
+  if (capabilities.overall_status === "fresh") return "经营数据已就绪";
+  if (capabilities.overall_status === "stale") return "部分数据时间较早";
+  if (capabilities.overall_status === "partial") return "部分数据可用";
+  if (capabilities.overall_status === "failed") return "数据同步失败";
+  return "尚未完成数据同步";
+}
+
 function messageStatusLabel(status: ConversationMessage["status"]) {
   if (status === "queued") return "等待受控处理";
   if (status === "running") return "正在处理";
   if (status === "failed") return "未完成";
   return status ?? "";
-}
-
-function wait(milliseconds: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function makeInitials(value: string) {
@@ -219,6 +431,50 @@ function sortByPinnedAndRecent<T extends { pinned_at: string | null; updated_at:
     if (Boolean(first.pinned_at) !== Boolean(second.pinned_at)) return first.pinned_at ? -1 : 1;
     return second.updated_at.localeCompare(first.updated_at);
   });
+}
+
+function scopeLabel(scope: OrganizationScope, units: OrganizationUnit[], language: UiLanguage) {
+  const c = copy[language];
+  if (scope.mode === "all_authorized") return c.scope;
+  const names = scope.organization_unit_ids
+    .map((id) => units.find((unit) => unit.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return names.join("、");
+  return language === "en" ? `${names.length} business units selected` : `已选 ${names.length} 个事业部`;
+}
+
+function scopeFromConversation(conversation: Conversation): OrganizationScope {
+  const existing = conversation.organization_scope;
+  if (existing) {
+    return {
+      mode: existing.mode,
+      organization_unit_ids: [...existing.organization_unit_ids],
+    };
+  }
+  if (conversation.organization_unit_id) {
+    return {
+      mode: "selected",
+      organization_unit_ids: [conversation.organization_unit_id],
+    };
+  }
+  return {
+    mode: "all_authorized",
+    organization_unit_ids: [],
+  };
+}
+
+function organizationScopeKey(scope: OrganizationScope) {
+  return scope.mode === "all_authorized"
+    ? "all_authorized"
+    : [...scope.organization_unit_ids].sort().join(",");
+}
+
+function resolvedDailyBriefScopeKey(brief: DailyBrief | null) {
+  if (!brief) return "all_authorized";
+  return brief.uses_enterprise_snapshot
+    ? "all_authorized"
+    : [...brief.organization_unit_ids].sort().join(",");
 }
 
 export function ProductionWorkspace({
@@ -236,16 +492,21 @@ export function ProductionWorkspace({
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState("");
   const [draft, setDraft] = useState("");
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState(
-    initialBootstrap.organizationUnits.length > 1
-      ? ALL_SCOPE_ID
-      : initialBootstrap.organizationUnits[0]?.id ?? ALL_SCOPE_ID,
+  const [selectedOrganizationScope, setSelectedOrganizationScope] = useState<OrganizationScope>(ALL_ORGANIZATIONS_SCOPE);
+  const [dailyBriefState, setDailyBriefState] = useState<DailyBriefLoadState>(() => ({
+    scopeKey: resolvedDailyBriefScopeKey(initialBootstrap.dailyBrief),
+    status: initialBootstrap.dailyBrief ? "ready" : "error",
+    data: initialBootstrap.dailyBrief,
+  }));
+  const [selectedModelId, setSelectedModelId] = useState(
+    initialBootstrap.authorizedModels.find((model) => model.is_default)?.model_id
+      ?? initialBootstrap.authorizedModels[0]?.model_id
+      ?? "",
   );
-  const [uploadedFiles, setUploadedFiles] = useState<FileMetadata[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
   const [workspaceError, setWorkspaceError] = useState("");
   const [toast, setToast] = useState("");
+  const [, setClockTick] = useState(0);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -256,6 +517,7 @@ export function ProductionWorkspace({
   const [preferencesView, setPreferencesView] = useState<PreferencesView | null>(null);
   const [sidebarMenu, setSidebarMenu] = useState<SidebarMenuState | null>(null);
   const [projectDialog, setProjectDialog] = useState<ProjectDialogState | null>(null);
+  const [conversationProjectDialog, setConversationProjectDialog] = useState<ConversationProjectDialogState | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [renameConversationId, setRenameConversationId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -278,29 +540,19 @@ export function ProductionWorkspace({
   });
   const [languagePreference, setLanguagePreference] = useState<UiLanguage>(() => {
     if (typeof window === "undefined") return "zh-CN";
-    const saved = window.localStorage.getItem("executive-workbench-language");
-    if (saved === "zh-CN" || saved === "zh-TW" || saved === "en") return saved;
+    const profileLocale = initialBootstrap.personalProfile?.locale;
+    if (profileLocale === "zh-CN" || profileLocale === "zh-TW") return profileLocale;
+    if (profileLocale === "en-US") return "en";
     return initialBootstrap.me.user.locale === "zh-TW" || initialBootstrap.me.user.locale === "en"
       ? initialBootstrap.me.user.locale
       : "zh-CN";
   });
-  const [profilePreferences, setProfilePreferences] = useState<ProfilePreferences>(() => {
-    if (typeof window === "undefined") return { salutation: "董事长", amountUnit: "万元" };
-    try {
-      const saved = JSON.parse(window.localStorage.getItem("executive-workbench-profile-preferences") || "null") as Partial<ProfilePreferences> | null;
-      return {
-        salutation: saved?.salutation?.trim() || "董事长",
-        amountUnit: saved?.amountUnit?.trim() || "万元",
-      };
-    } catch {
-      return { salutation: "董事长", amountUnit: "万元" };
-    }
+  const [profilePreferences, setProfilePreferences] = useState<ProfilePreferences>({
+    salutation: initialBootstrap.personalProfile?.salutation || "董事长",
+    amountUnit: initialBootstrap.personalProfile?.amount_unit || "wan",
+    responseStyle: initialBootstrap.personalProfile?.response_style || "balanced",
   });
-  const [memoryEnabled, setMemoryEnabled] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return window.localStorage.getItem("executive-workbench-memory-enabled") !== "false";
-  });
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [memoryEnabled, setMemoryEnabled] = useState(initialBootstrap.personalProfile?.memory_enabled ?? initialBootstrap.me.user.memory_enabled);
   const accountRef = useRef<HTMLDivElement>(null);
   const sidebarMenuRef = useRef<HTMLDivElement>(null);
   const deepLinkHandled = useRef(false);
@@ -309,11 +561,16 @@ export function ProductionWorkspace({
   const c = copy[languagePreference];
   const organizationUnits = bootstrap.organizationUnits;
   const businessDataReady = organizationUnits.length > 0;
+  const dataCapabilities = bootstrap.dataCapabilities;
+  const dailyBriefScopeRequestKey = organizationScopeKey(selectedOrganizationScope);
+  const dailyBrief = dailyBriefState.scopeKey === dailyBriefScopeRequestKey && dailyBriefState.status === "ready"
+    ? dailyBriefState.data
+    : null;
+  const dailyBriefStatus: DailyBriefLoadState["status"] = dailyBriefState.scopeKey === dailyBriefScopeRequestKey
+    ? dailyBriefState.status
+    : "loading";
   const activeConversation = bootstrap.conversations.find((item) => item.id === activeConversationId) ?? null;
-  const selectedOrganization = selectedOrganizationId === ALL_SCOPE_ID
-    ? null
-    : organizationUnits.find((unit) => unit.id === selectedOrganizationId) ?? null;
-  const selectedScopeLabel = selectedOrganization?.name ?? c.scope;
+  const selectedScopeLabel = scopeLabel(selectedOrganizationScope, organizationUnits, languagePreference);
   const sortedProjects = useMemo(() => sortByPinnedAndRecent(bootstrap.projects), [bootstrap.projects]);
   const pinnedConversations = useMemo(
     () => sortByPinnedAndRecent(bootstrap.conversations.filter((item) => item.pinned_at && !item.archived_at)),
@@ -321,7 +578,7 @@ export function ProductionWorkspace({
   );
   const recentConversations = useMemo(
     () => [...bootstrap.conversations]
-      .filter((item) => !item.pinned_at && !item.archived_at)
+      .filter((item) => !item.project_id && !item.pinned_at && !item.archived_at)
       .sort((first, second) => (second.last_message_at || second.updated_at).localeCompare(first.last_message_at || first.updated_at))
       .slice(0, 14),
     [bootstrap.conversations],
@@ -334,6 +591,50 @@ export function ProductionWorkspace({
   );
   const optionalWarning = Object.values(bootstrap.optionalErrors)[0];
   const userInitials = makeInitials(preferredDisplayName(me)).toUpperCase();
+  // Production mode never falls back to bundled demo fixtures: every render reads
+  // real backend data, and any error surfaces as a 脱敏演示环境 banner instead of demo data.
+  const productionModeNotice = "生产模式不会使用演示数据：所有数据均来自后端服务实时返回。";
+  const hasPendingAssistant = Boolean(activeConversationId && sending);
+  useEffect(() => {
+    if (dailyBriefState.scopeKey === dailyBriefScopeRequestKey) return;
+    let cancelled = false;
+    const requestedScopeKey = dailyBriefScopeRequestKey;
+    const organizationUnitIds = requestedScopeKey === "all_authorized" ? [] : requestedScopeKey.split(",").filter(Boolean);
+    void productionServices.data.dailyBrief(organizationUnitIds).then((nextBrief) => {
+      if (cancelled) return;
+      setBootstrap((current) => ({ ...current, dailyBrief: nextBrief }));
+      setDailyBriefState({ scopeKey: requestedScopeKey, status: "ready", data: nextBrief });
+    }).catch(() => {
+      if (cancelled) return;
+      setDailyBriefState({ scopeKey: requestedScopeKey, status: "error", data: null });
+    });
+    return () => { cancelled = true; };
+  }, [dailyBriefScopeRequestKey, dailyBriefState.scopeKey]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    const source = new EventSource(
+      productionServices.conversations.streamUrl(activeConversationId, 0),
+      { withCredentials: true },
+    );
+    source.addEventListener("message", (event) => {
+      try {
+        const message = JSON.parse((event as MessageEvent<string>).data) as ConversationMessage;
+        setMessages((current) => {
+          const existingIndex = current.findIndex((item) => item.id === message.id);
+          if (existingIndex < 0) {
+            return [...current, message].sort((first, second) => first.sequence - second.sequence);
+          }
+          const next = [...current];
+          next[existingIndex] = message;
+          return next;
+        });
+      } catch {
+        // A malformed event is ignored; EventSource remains connected for the next update.
+      }
+    });
+    return () => source.close();
+  }, [activeConversationId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themePreference;
@@ -347,18 +648,24 @@ export function ProductionWorkspace({
   }, [languagePreference]);
 
   useEffect(() => {
-    window.localStorage.setItem("executive-workbench-profile-preferences", JSON.stringify(profilePreferences));
-  }, [profilePreferences]);
-
-  useEffect(() => {
-    window.localStorage.setItem("executive-workbench-memory-enabled", String(memoryEnabled));
-  }, [memoryEnabled]);
-
-  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockTick((value) => value + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const closeSidebar = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", closeSidebar);
+    return () => window.removeEventListener("keydown", closeSidebar);
+  }, [sidebarOpen]);
 
   useEffect(() => {
     window.localStorage.setItem("executive-workbench-unread-conversations", JSON.stringify(unreadConversationIds));
@@ -420,6 +727,13 @@ export function ProductionWorkspace({
     setSidebarOpen(false);
     setActivePanel(null);
     setUnreadConversationIds((current) => current.filter((id) => id !== conversation.id));
+    setSelectedOrganizationScope(scopeFromConversation(conversation));
+    setSelectedModelId(
+      conversation.selected_model_id
+        ?? bootstrap.authorizedModels.find((model) => model.is_default)?.model_id
+        ?? bootstrap.authorizedModels[0]?.model_id
+        ?? "",
+    );
     try {
       const result = await productionServices.conversations.messages(conversation.id);
       setMessages(result.items);
@@ -432,7 +746,7 @@ export function ProductionWorkspace({
     } finally {
       setMessagesLoading(false);
     }
-  }, [onSessionExpired]);
+  }, [bootstrap.authorizedModels, onSessionExpired]);
 
   useEffect(() => {
     if (deepLinkHandled.current) return;
@@ -451,51 +765,39 @@ export function ProductionWorkspace({
     setMessages([]);
     setMessagesError("");
     setDraft("");
-    setUploadedFiles([]);
     setSidebarOpen(false);
     setActivePanel(null);
     const project = bootstrap.projects.find((item) => item.id === projectId);
-    if (project?.organization_unit_id) setSelectedOrganizationId(project.organization_unit_id);
+    setSelectedOrganizationScope(project?.organization_unit_id
+      ? { mode: "selected", organization_unit_ids: [project.organization_unit_id] }
+      : ALL_ORGANIZATIONS_SCOPE);
+    setSelectedModelId(
+      bootstrap.authorizedModels.find((model) => model.is_default)?.model_id
+        ?? bootstrap.authorizedModels[0]?.model_id
+        ?? "",
+    );
     window.history.replaceState(null, "", window.location.pathname);
-  }
-
-  async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
-    const incoming = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    if (!incoming.length) return;
-    setUploading(true);
-    const results = await runRequest(async () => {
-      const uploaded: FileMetadata[] = [];
-      for (const file of incoming.slice(0, 10)) {
-        if (file.size > 50 * 1024 * 1024) throw new Error(`${file.name} 超过 50 MB 限制。`);
-        uploaded.push(await productionServices.files.upload(file, activeConversationId ?? undefined));
-      }
-      return uploaded;
-    });
-    if (results) setUploadedFiles((current) => [...current, ...results]);
-    setUploading(false);
-  }
-
-  async function removeUploadedFile(file: FileMetadata) {
-    const removed = await runRequest(async () => {
-      await productionServices.files.remove(file.id);
-      return true;
-    });
-    if (removed) setUploadedFiles((current) => current.filter((item) => item.id !== file.id));
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || sending || !businessDataReady) return;
+    if (!content || sending) return;
+    if (!selectedModelId || !bootstrap.authorizedModels.some((model) => model.model_id === selectedModelId)) {
+      setWorkspaceError(selectedModelId
+        ? "本会话原模型已取消授权，请先重新选择可用模型。"
+        : "管理员尚未授权可用模型，暂时无法发送消息。");
+      return;
+    }
     setSending(true);
     await runRequest(async () => {
       let conversationId = activeConversationId;
       if (!conversationId) {
         const createdConversation = await productionServices.conversations.create({
           title: content.slice(0, 42),
-          organization_unit_id: selectedOrganization?.id,
+          organization_scope: selectedOrganizationScope,
           project_id: activeProjectId ?? undefined,
+          model_id: selectedModelId,
         });
         conversationId = createdConversation.id;
         setActiveConversationId(conversationId);
@@ -513,26 +815,166 @@ export function ProductionWorkspace({
       const message = await productionServices.conversations.sendMessage(
         conversationId,
         content,
-        uploadedFiles.filter((file) => file.status === "ready" || file.status === "partial").map((file) => file.id),
+        selectedOrganizationScope,
+        selectedModelId,
       );
       setMessages((current) => [...current, message]);
       setDraft("");
-      setUploadedFiles([]);
       window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversationId)}`);
-      let refreshed = await productionServices.conversations.messages(conversationId);
+      const refreshed = await productionServices.conversations.messages(conversationId);
       setMessages(refreshed.items);
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const hasPendingAssistant = refreshed.items.some(
-          (item) => item.role === "assistant" && (item.status === "queued" || item.status === "running"),
-        );
-        if (!hasPendingAssistant) break;
-        await wait(750);
-        refreshed = await productionServices.conversations.messages(conversationId);
-        setMessages(refreshed.items);
-      }
       await refreshWorkspace();
     });
     setSending(false);
+  }
+
+  async function changeSelectedModel(modelId: string) {
+    if (modelId === selectedModelId) return;
+    const previous = selectedModelId;
+    setSelectedModelId(modelId);
+    if (!activeConversationId) return;
+    const updated = await runRequest(
+      () => productionServices.conversations.update(activeConversationId, { model_id: modelId }),
+    );
+    if (!updated) {
+      setSelectedModelId(previous);
+      return;
+    }
+    setBootstrap((current) => ({
+      ...current,
+      conversations: current.conversations.map((item) => item.id === updated.id ? updated : item),
+    }));
+    setToast(`本会话后续将使用${bootstrap.authorizedModels.find((item) => item.model_id === modelId)?.display_name ?? modelId}`);
+  }
+
+  async function moveConversationToProject(conversationId: string, projectId: string | null) {
+    const updated = await runRequest(
+      () => productionServices.conversations.setProject(conversationId, projectId),
+    );
+    if (!updated) return false;
+    setBootstrap((current) => ({
+      ...current,
+      conversations: current.conversations.map((item) => item.id === updated.id ? updated : item),
+    }));
+    setProjectConversations((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).map(([id, items]) => [
+          id,
+          items.filter((item) => item.id !== conversationId),
+        ]),
+      );
+      if (projectId) next[projectId] = [updated, ...(next[projectId] ?? [])];
+      return next;
+    });
+    setConversationProjectDialog(null);
+    setSidebarMenu(null);
+    setToast(projectId ? "会话已移入项目" : "会话已移出项目");
+    return true;
+  }
+
+  function answerJob(messageId: string) {
+    return bootstrap.jobs.find(
+      (job) => String(job.payload_json.assistant_message_id || "") === messageId,
+    );
+  }
+
+  async function cancelAnswer(messageId: string) {
+    const job = answerJob(messageId);
+    if (!job) return;
+    const updated = await runRequest(() => productionServices.jobs.cancel(job.id));
+    if (!updated) return;
+    setBootstrap((current) => ({
+      ...current,
+      jobs: current.jobs.map((item) => (item.id === updated.id ? updated : item)),
+    }));
+    setMessages((current) => current.map((message) => (
+      message.id === messageId
+        ? { ...message, status: "failed", content: "请求已取消" }
+        : message
+    )));
+    setToast("已停止本次处理");
+  }
+
+  async function retryAnswer(messageId: string) {
+    const job = answerJob(messageId);
+    if (!job || !activeConversationId) return;
+    const retried = await runRequest(() => productionServices.jobs.retry(job.id));
+    if (!retried) return;
+    setBootstrap((current) => ({ ...current, jobs: [retried, ...current.jobs] }));
+    const refreshed = await runRequest(
+      () => productionServices.conversations.messages(activeConversationId),
+    );
+    if (refreshed) setMessages(refreshed.items);
+    setToast("已重新进入受控处理流程");
+  }
+
+  async function changeMemoryEnabled(value: boolean) {
+    const previous = memoryEnabled;
+    setMemoryEnabled(value);
+    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
+      salutation: profilePreferences.salutation,
+      amount_unit: profilePreferences.amountUnit,
+      response_style: profilePreferences.responseStyle,
+      locale: languagePreference === "en" ? "en-US" : languagePreference,
+      memory_enabled: value,
+    }));
+    if (!updated) {
+      setMemoryEnabled(previous);
+      return;
+    }
+    setBootstrap((current) => ({
+      ...current,
+      personalProfile: updated,
+      me: { ...current.me, user: { ...current.me.user, memory_enabled: updated.memory_enabled } },
+    }));
+    setToast(value ? "长期记忆已开启" : "长期记忆已关闭");
+  }
+
+  async function saveProfilePreferences(value: ProfilePreferences) {
+    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
+      salutation: value.salutation,
+      amount_unit: value.amountUnit,
+      response_style: value.responseStyle,
+      locale: languagePreference === "en" ? "en-US" : languagePreference,
+      memory_enabled: memoryEnabled,
+    }));
+    if (!updated) return false;
+    setProfilePreferences({
+      salutation: updated.salutation,
+      amountUnit: updated.amount_unit,
+      responseStyle: updated.response_style,
+    });
+    setBootstrap((current) => ({
+      ...current,
+      personalProfile: updated,
+      me: {
+        ...current.me,
+        user: {
+          ...current.me.user,
+          locale: updated.locale,
+          memory_enabled: updated.memory_enabled,
+        },
+      },
+    }));
+    setToast("服务偏好已安全保存");
+    return true;
+  }
+
+  async function changeLanguage(value: UiLanguage) {
+    const previous = languagePreference;
+    setLanguagePreference(value);
+    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
+      salutation: profilePreferences.salutation,
+      amount_unit: profilePreferences.amountUnit,
+      response_style: profilePreferences.responseStyle,
+      locale: value === "en" ? "en-US" : value,
+      memory_enabled: memoryEnabled,
+    }));
+    if (!updated) {
+      setLanguagePreference(previous);
+      return;
+    }
+    setBootstrap((current) => ({ ...current, personalProfile: updated }));
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -725,7 +1167,15 @@ export function ProductionWorkspace({
         setBootstrap((current) => ({
           ...current,
           projects: current.projects.filter((item) => item.id !== project.id),
+          conversations: current.conversations.map((item) => (
+            item.project_id === project.id ? { ...item, project_id: null } : item
+          )),
         }));
+        setProjectConversations((current) => {
+          const next = { ...current };
+          delete next[project.id];
+          return next;
+        });
         setExpandedProjectIds((current) => current.filter((id) => id !== project.id));
         setActiveProjectId((current) => current === project.id ? null : current);
         setToast("项目已移除");
@@ -766,7 +1216,6 @@ export function ProductionWorkspace({
         <div className="sidebar-scroll-region">
           <button className="new-conversation-button" type="button" onClick={() => newConversation()}><span aria-hidden="true">＋</span><strong className="sidebar-label">{c.newConversation}</strong><kbd className="sidebar-label">⌘ K</kbd></button>
           <nav className="workspace-navigation" aria-label="经营工作台功能">
-            <button type="button" className={!activeConversationId && !activePanel ? "active" : ""} onClick={() => newConversation()}><span aria-hidden="true">问</span><strong className="sidebar-label">经营问数</strong></button>
             <button type="button" className={activePanel === "daily" ? "active" : ""} onClick={() => void openReport("daily")}><span aria-hidden="true">今</span><strong className="sidebar-label">{c.daily}</strong></button>
             <button type="button" className={activePanel === "weekly" ? "active" : ""} onClick={() => void openReport("weekly")}><span aria-hidden="true">周</span><strong className="sidebar-label">{c.weekly}</strong></button>
             <button type="button" className={activePanel === "history" ? "active" : ""} onClick={() => setActivePanel("history")}><span aria-hidden="true">历</span><strong className="sidebar-label">{c.history}</strong></button>
@@ -846,7 +1295,7 @@ export function ProductionWorkspace({
         </div>
 
         <footer className="sidebar-footer">
-          <button type="button" className="sidebar-data-status" onClick={() => setActivePanel("scope")}><span className={`status-dot ${businessDataReady ? "positive" : ""}`} aria-hidden="true" /><span className="sidebar-label"><strong>{businessDataReady ? c.dataReady : c.dataMissing}</strong><small>{businessDataReady ? `${organizationUnits.length} 个授权事业部` : "请联系企业管理员"}</small></span></button>
+          <button type="button" className="sidebar-data-status" onClick={() => setActivePanel("scope")}><span className="status-dot positive" aria-hidden="true" /><span className="sidebar-label"><strong>{businessDataReady ? "经营数据已接入" : c.dataMissing}</strong><small>{dataCapabilities ? `${professionalSourceLabel(dataCapabilities.source_label)} · ${organizationUnits.length} 个事业部` : businessDataReady ? "等待首次数据同步" : "请联系企业管理员"}</small></span></button>
           <div ref={accountRef} className="profile-control workspace-profile">
             <button className="profile-button" type="button" aria-label="打开个人菜单" aria-expanded={accountMenuOpen} onClick={() => { setAccountMenuOpen((current) => !current); setLanguageMenuOpen(false); }}><span className="profile-avatar" aria-hidden="true">{userInitials}</span><span className="sidebar-label"><strong>{preferredDisplayName(me)}</strong><small>{selectedScopeLabel}</small></span><span className="profile-menu-chevron sidebar-label" aria-hidden="true">{accountMenuOpen ? "⌄" : "›"}</span></button>
             {accountMenuOpen && <div className="profile-menu account-menu" role="menu" aria-label="个人菜单">
@@ -855,7 +1304,7 @@ export function ProductionWorkspace({
               <button type="button" className="account-menu-item" role="menuitem" onClick={() => { setPreferencesView("appearance"); setAccountMenuOpen(false); }}><UiIcon name="settings" /><span>{c.settings}</span></button>
               <div className="account-language-control">
                 <button type="button" className="account-menu-item" role="menuitem" aria-haspopup="menu" aria-expanded={languageMenuOpen} onClick={() => setLanguageMenuOpen((current) => !current)}><UiIcon name="language" /><span>{c.language}</span><small>{languageOptions.find((option) => option.id === languagePreference)?.label}</small><UiIcon name="chevron" /></button>
-                {languageMenuOpen && <div className="language-submenu" role="menu" aria-label="选择界面语言">{languageOptions.map((option) => <button type="button" key={option.id} className={languagePreference === option.id ? "selected" : ""} role="menuitemradio" aria-checked={languagePreference === option.id} onClick={() => { setLanguagePreference(option.id); setLanguageMenuOpen(false); setAccountMenuOpen(false); }}><span>{option.label}</span><span aria-hidden="true">{languagePreference === option.id ? "✓" : ""}</span></button>)}</div>}
+                {languageMenuOpen && <div className="language-submenu" role="menu" aria-label="选择界面语言">{languageOptions.map((option) => <button type="button" key={option.id} className={languagePreference === option.id ? "selected" : ""} role="menuitemradio" aria-checked={languagePreference === option.id} onClick={() => { void changeLanguage(option.id); setLanguageMenuOpen(false); setAccountMenuOpen(false); }}><span>{option.label}</span><span aria-hidden="true">{languagePreference === option.id ? "✓" : ""}</span></button>)}</div>}
               </div>
               <div className="profile-menu-divider" />
               <button type="button" className="account-menu-item account-menu-logout" role="menuitem" onClick={() => void logout()}><UiIcon name="logout" /><span>{c.logout}</span></button>
@@ -867,6 +1316,8 @@ export function ProductionWorkspace({
           <button type="button" role="menuitem" onClick={() => void toggleConversationPinned(sidebarMenuConversation)}>{sidebarMenuConversation.pinned_at ? "取消置顶" : "置顶"}</button>
           <button type="button" role="menuitem" onClick={() => toggleUnread(sidebarMenuConversation.id)}>{unreadConversationIds.includes(sidebarMenuConversation.id) ? "标记为已读" : "标记未读"}</button>
           <button type="button" role="menuitem" onClick={() => { setRenameConversationId(sidebarMenuConversation.id); setRenameDraft(sidebarMenuConversation.title); setSidebarMenu(null); }}>重命名</button>
+          <button type="button" role="menuitem" onClick={() => { setConversationProjectDialog({ conversationId: sidebarMenuConversation.id }); setSidebarMenu(null); }}>{sidebarMenuConversation.project_id ? "移动到其他项目" : "移到项目"}</button>
+          {sidebarMenuConversation.project_id && <button type="button" role="menuitem" onClick={() => void moveConversationToProject(sidebarMenuConversation.id, null)}>移出项目</button>}
           <button type="button" role="menuitem" onClick={() => requestArchiveConversation(sidebarMenuConversation)}>归档</button>
           <span className="sidebar-menu-divider" role="separator" />
           <button type="button" role="menuitem" onClick={() => void copyText(sidebarMenuConversation.id, "会话 ID 已复制")}>复制会话 ID</button>
@@ -889,7 +1340,8 @@ export function ProductionWorkspace({
         <header className="workspace-topbar">
           <button className="mobile-sidebar-trigger" type="button" aria-label="打开侧栏" onClick={() => setSidebarOpen(true)}>☰</button>
           <div className="workspace-title-block"><strong>{activeConversation?.title || (activeProjectId ? bootstrap.projects.find((item) => item.id === activeProjectId)?.name : null) || c.newConversation}</strong><small>{environmentLabel(me)} · {selectedScopeLabel}</small></div>
-          <div className="workspace-topbar-actions"><span className="production-environment-badge">{environmentLabel(me)}</span><button className="topbar-scope-button" type="button" onClick={() => void refreshWorkspace()}>刷新数据</button><button className="topbar-new-button" type="button" aria-label="新建会话" onClick={() => newConversation()}>＋</button></div>
+          <time className="workspace-topbar-date" dateTime={new Date().toISOString()}>{localizedDate(languagePreference, me.user.timezone)}</time>
+          <div className="workspace-topbar-actions"><button className="topbar-scope-button" type="button" onClick={() => setActivePanel("scope")}>数据状态</button><button className="topbar-new-button" type="button" aria-label="新建会话" onClick={() => newConversation()}>＋</button></div>
         </header>
         <main id="main-content" className="workspace-main">
           {activeConversationId ? (
@@ -901,18 +1353,19 @@ export function ProductionWorkspace({
               draft={draft}
               setDraft={setDraft}
               sending={sending}
-              uploadedFiles={uploadedFiles}
-              uploading={uploading}
-              fileRef={fileRef}
-              onFiles={uploadFiles}
-              onRemoveFile={removeUploadedFile}
               onKeyDown={handleComposerKeyDown}
               onSubmit={submit}
               organizationUnits={organizationUnits}
-              selectedOrganizationId={selectedOrganizationId}
-              setSelectedOrganizationId={setSelectedOrganizationId}
+              organizationScope={selectedOrganizationScope}
+              setOrganizationScope={setSelectedOrganizationScope}
+              authorizedModels={bootstrap.authorizedModels}
+              selectedModelId={selectedModelId}
+              setSelectedModelId={(modelId) => void changeSelectedModel(modelId)}
               language={languagePreference}
               disclaimer={c.disclaimer}
+              jobs={bootstrap.jobs}
+              onCancelAnswer={(messageId) => void cancelAnswer(messageId)}
+              onRetryAnswer={(messageId) => void retryAnswer(messageId)}
             />
           ) : (
             <ProductionHome
@@ -920,18 +1373,18 @@ export function ProductionWorkspace({
               language={languagePreference}
               salutation={profilePreferences.salutation}
               organizationUnits={organizationUnits}
-              selectedOrganizationId={selectedOrganizationId}
-              setSelectedOrganizationId={setSelectedOrganizationId}
-              latestReport={latestDailyReport}
+              organizationScope={selectedOrganizationScope}
+              setOrganizationScope={setSelectedOrganizationScope}
+              authorizedModels={bootstrap.authorizedModels}
+              selectedModelId={selectedModelId}
+              setSelectedModelId={(modelId) => void changeSelectedModel(modelId)}
+              dailyBrief={dailyBrief}
+              dailyBriefStatus={dailyBriefStatus}
+              dataCapabilities={dataCapabilities}
               onOpenReport={() => void openReport("daily", latestDailyReport?.id)}
               draft={draft}
               setDraft={setDraft}
               sending={sending}
-              uploadedFiles={uploadedFiles}
-              uploading={uploading}
-              fileRef={fileRef}
-              onFiles={uploadFiles}
-              onRemoveFile={removeUploadedFile}
               onKeyDown={handleComposerKeyDown}
               onSubmit={submit}
               activeProjectName={activeProjectId ? bootstrap.projects.find((item) => item.id === activeProjectId)?.name ?? null : null}
@@ -949,9 +1402,12 @@ export function ProductionWorkspace({
         conversations={bootstrap.conversations}
         memories={bootstrap.memories}
         organizationUnits={organizationUnits}
+        dataCapabilities={dataCapabilities}
+        dailyBrief={dailyBrief}
+        dailyBriefStatus={dailyBriefStatus}
         language={languagePreference}
         memoryEnabled={memoryEnabled}
-        setMemoryEnabled={setMemoryEnabled}
+        setMemoryEnabled={(value) => void changeMemoryEnabled(value)}
         onSelectReport={(report) => void openReport(report.kind === "weekly" ? "weekly" : "daily", report.id)}
         onOpenConversation={(conversation) => void openConversation(conversation)}
         onNewConversation={() => newConversation()}
@@ -982,9 +1438,9 @@ export function ProductionWorkspace({
         setTheme={setThemePreference}
         language={languagePreference}
         profilePreferences={profilePreferences}
-        setProfilePreferences={setProfilePreferences}
+        setProfilePreferences={saveProfilePreferences}
         memoryEnabled={memoryEnabled}
-        setMemoryEnabled={setMemoryEnabled}
+        setMemoryEnabled={(value) => void changeMemoryEnabled(value)}
         memories={bootstrap.memories}
         onCreateMemory={async (title, content, kind, organizationUnitId) => {
           const created = await runRequest(() => productionServices.memories.create({ title, content, kind, organization_unit_id: organizationUnitId || undefined }));
@@ -1005,6 +1461,12 @@ export function ProductionWorkspace({
         organizationUnits={organizationUnits}
         onClose={() => setProjectDialog(null)}
         onSave={(name, description, organizationUnitId) => saveProject(projectDialog, name, description, organizationUnitId)}
+      />}
+      {conversationProjectDialog && <ConversationProjectDialog
+        conversation={bootstrap.conversations.find((item) => item.id === conversationProjectDialog.conversationId) ?? null}
+        projects={sortedProjects}
+        onClose={() => setConversationProjectDialog(null)}
+        onMove={(projectId) => moveConversationToProject(conversationProjectDialog.conversationId, projectId)}
       />}
       {confirmState && <ConfirmDialog state={confirmState} onCancel={() => setConfirmState(null)} onConfirm={() => { const action = confirmState.action; setConfirmState(null); void action(); }} />}
       {toast && <Toast message={toast} />}
@@ -1058,18 +1520,18 @@ function ProductionHome({
   language,
   salutation,
   organizationUnits,
-  selectedOrganizationId,
-  setSelectedOrganizationId,
-  latestReport,
+  organizationScope,
+  setOrganizationScope,
+  authorizedModels,
+  selectedModelId,
+  setSelectedModelId,
+  dailyBrief,
+  dailyBriefStatus,
+  dataCapabilities,
   onOpenReport,
   draft,
   setDraft,
   sending,
-  uploadedFiles,
-  uploading,
-  fileRef,
-  onFiles,
-  onRemoveFile,
   onKeyDown,
   onSubmit,
   activeProjectName,
@@ -1078,72 +1540,81 @@ function ProductionHome({
   language: UiLanguage;
   salutation: string;
   organizationUnits: OrganizationUnit[];
-  selectedOrganizationId: string;
-  setSelectedOrganizationId: (value: string) => void;
-  latestReport: Report | null;
+  organizationScope: OrganizationScope;
+  setOrganizationScope: (value: OrganizationScope) => void;
+  authorizedModels: AuthorizedModel[];
+  selectedModelId: string;
+  setSelectedModelId: (value: string) => void;
+  dailyBrief: DailyBrief | null;
+  dailyBriefStatus: DailyBriefLoadState["status"];
+  dataCapabilities: DataCapabilities | null;
   onOpenReport: () => void;
   draft: string;
   setDraft: (value: string) => void;
   sending: boolean;
-  uploadedFiles: FileMetadata[];
-  uploading: boolean;
-  fileRef: React.RefObject<HTMLInputElement | null>;
-  onFiles: (event: ChangeEvent<HTMLInputElement>) => void;
-  onRemoveFile: (file: FileMetadata) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: (event: FormEvent) => void;
   activeProjectName: string | null;
 }) {
   const c = copy[language];
+  const greeting = useHumanGreeting(me, language, salutation);
   const hasScope = organizationUnits.length > 0;
   const suggestions = language === "en"
-    ? ["Summarize this month's operating changes", "Show items that need my confirmation", "Extract executive points from an uploaded file"]
+    ? ["Summarize this month's operating changes", "Show items that need my confirmation", "Draft a three-minute executive update"]
     : language === "zh-TW"
-      ? ["整理本月經營變化", "查看需要我確認的事項", "從上傳檔案提取管理層要點"]
-      : ["整理本月经营变化", "查看需要我确认的事项", "从上传文件提取管理层要点"];
+      ? ["整理本月經營變化", "查看需要我確認的事項", "起草三分鐘經營會匯報"]
+      : ["整理本月经营变化", "查看需要我确认的事项", "起草三分钟经营会汇报"];
+  const dailyBriefAsOf = dailyBriefDataAsOf(dailyBrief);
+  const briefTitle = dailyBrief
+    ? dailyBriefHeadline(dailyBrief, language)
+    : dailyBriefStatus === "loading"
+      ? language === "en" ? "Reviewing today's priorities" : language === "zh-TW" ? "正在核對今日事項" : "正在核对今日事项"
+      : language === "en" ? "Morning brief is temporarily unavailable" : language === "zh-TW" ? "晨間簡報暫不可用" : "晨间简报暂不可用";
+  const briefMeta = dailyBrief
+    ? dailyBriefAsOf
+      ? `${language === "en" ? "Morning brief · Data through" : language === "zh-TW" ? "晨間簡報 · 數據截至" : "晨间简报 · 数据截至"} ${formatTimestamp(dailyBriefAsOf, language)}`
+      : language === "en" ? "Morning brief · Data status pending" : language === "zh-TW" ? "晨間簡報 · 數據狀態待確認" : "晨间简报 · 数据状态待确认"
+    : dailyBriefStatus === "loading"
+      ? language === "en" ? "Morning brief · Checking the current scope" : language === "zh-TW" ? "晨間簡報 · 正在核對目前範圍" : "晨间简报 · 正在核对当前范围"
+      : language === "en" ? "Morning brief · Check data status and try again" : language === "zh-TW" ? "晨間簡報 · 請檢查數據狀態後重試" : "晨间简报 · 请检查数据状态后重试";
 
   return (
     <div className="workspace-home">
       <div className="home-empty-stage">
         <div className="home-empty-inner">
-          {latestReport ? (
-            <button className="morning-brief-trigger production-brief-trigger" type="button" onClick={onOpenReport}>
-              <span className="morning-brief-dot" aria-hidden="true" />
-              <span><strong>{latestReport.title}</strong><small>{latestReport.data_as_of ? `数据截至 ${formatTimestamp(latestReport.data_as_of, language)}` : "最新简报已生成"}</small></span>
-              <span>查看晨间摘要 <b aria-hidden="true">›</b></span>
-            </button>
-          ) : (
-            <div className="morning-brief-trigger production-brief-trigger empty" role="status"><span className="morning-brief-dot" aria-hidden="true" /><span><strong>今日简报尚未生成</strong><small>连接经营数据与简报任务后将在这里出现</small></span><span>尚未配置</span></div>
-          )}
+          <div className="home-focus-group">
+            <button className="morning-brief-trigger production-brief-trigger" type="button" onClick={() => dailyBrief && onOpenReport()} disabled={!dailyBrief}>
+                <span className="morning-brief-dot" aria-hidden="true" />
+                <span><strong>{briefTitle}</strong><small>{briefMeta}</small></span>
+                <span>{language === "en" ? "View morning brief" : language === "zh-TW" ? "查看晨間摘要" : "查看晨间摘要"} <b aria-hidden="true">›</b></span>
+              </button>
 
-          <section className="workspace-greeting" aria-labelledby="production-greeting-title">
-            <p>{localizedDate(language, me.user.timezone)}</p>
-            <div className="greeting-title-line"><span className="service-mark" aria-hidden="true" /><h1 id="production-greeting-title">{greetingForCurrentHour(me.user.timezone, language)}，{salutation}</h1></div>
-            <span>{hasScope ? c.greetingQuestion : "企业管理员尚未为您配置可分析的事业部。"}</span>
-            {activeProjectName && <small className="active-project-context">当前会话将归入项目：{activeProjectName}</small>}
-          </section>
+            <section className="workspace-greeting" aria-labelledby="production-greeting-title">
+              <div className="greeting-title-line"><span className="service-mark" aria-hidden="true" /><h1 id="production-greeting-title">{greeting}</h1></div>
+              {!hasScope && <small className="active-project-context">经营数据尚未配置，仍可进行泛化问答。</small>}
+              {activeProjectName && <small className="active-project-context">当前会话将归入项目：{activeProjectName}</small>}
+            </section>
 
-          <ProductionComposer
-            id="production-home-question"
-            language={language}
-            draft={draft}
-            setDraft={setDraft}
-            sending={sending}
-            disabled={!hasScope}
-            organizationUnits={organizationUnits}
-            selectedOrganizationId={selectedOrganizationId}
-            setSelectedOrganizationId={setSelectedOrganizationId}
-            uploadedFiles={uploadedFiles}
-            uploading={uploading}
-            fileRef={fileRef}
-            onFiles={onFiles}
-            onRemoveFile={onRemoveFile}
-            onKeyDown={onKeyDown}
-            onSubmit={onSubmit}
-          />
+            <ProductionComposer
+              id="production-home-question"
+              language={language}
+              draft={draft}
+              setDraft={setDraft}
+              sending={sending}
+              disabled={false}
+              organizationUnits={organizationUnits}
+              organizationScope={organizationScope}
+              setOrganizationScope={setOrganizationScope}
+              authorizedModels={authorizedModels}
+              selectedModelId={selectedModelId}
+              setSelectedModelId={setSelectedModelId}
+              onKeyDown={onKeyDown}
+              onSubmit={onSubmit}
+            />
 
-          {hasScope && <section className="prompt-suggestions production-prompt-suggestions" aria-label="从一个问题开始"><h2>{language === "en" ? "Start with a question" : "从一个问题开始"}</h2><div>{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => setDraft(suggestion)}><span>{suggestion}</span><i aria-hidden="true">›</i></button>)}</div></section>}
-          <p className="home-service-note">生产模式不会使用演示数据。{c.disclaimer}</p>
+            <section className="prompt-suggestions production-prompt-suggestions" aria-label={language === "en" ? "Suggested questions" : "建议问题"}><div>{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => setDraft(suggestion)}><span>{suggestion}</span><i aria-hidden="true">›</i></button>)}</div></section>
+          </div>
+          <p className="home-service-note">{dataCapabilities?.source_kind.startsWith("simulated_") ? "当前使用演示模拟数据。" : dataCapabilities ? "经营数据已接入。" : "当前尚未激活经营数据。"}{c.disclaimer}</p>
         </div>
       </div>
     </div>
@@ -1158,18 +1629,19 @@ function ProductionConversation({
   draft,
   setDraft,
   sending,
-  uploadedFiles,
-  uploading,
-  fileRef,
-  onFiles,
-  onRemoveFile,
   onKeyDown,
   onSubmit,
   organizationUnits,
-  selectedOrganizationId,
-  setSelectedOrganizationId,
+  organizationScope,
+  setOrganizationScope,
+  authorizedModels,
+  selectedModelId,
+  setSelectedModelId,
   language,
   disclaimer,
+  jobs,
+  onCancelAnswer,
+  onRetryAnswer,
 }: {
   conversation: Conversation | null;
   messages: ConversationMessage[];
@@ -1178,18 +1650,19 @@ function ProductionConversation({
   draft: string;
   setDraft: (value: string) => void;
   sending: boolean;
-  uploadedFiles: FileMetadata[];
-  uploading: boolean;
-  fileRef: React.RefObject<HTMLInputElement | null>;
-  onFiles: (event: ChangeEvent<HTMLInputElement>) => void;
-  onRemoveFile: (file: FileMetadata) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: (event: FormEvent) => void;
   organizationUnits: OrganizationUnit[];
-  selectedOrganizationId: string;
-  setSelectedOrganizationId: (value: string) => void;
+  organizationScope: OrganizationScope;
+  setOrganizationScope: (value: OrganizationScope) => void;
+  authorizedModels: AuthorizedModel[];
+  selectedModelId: string;
+  setSelectedModelId: (value: string) => void;
   language: UiLanguage;
   disclaimer: string;
+  jobs: Job[];
+  onCancelAnswer: (messageId: string) => void;
+  onRetryAnswer: (messageId: string) => void;
 }) {
   return (
     <div className="chat-page production-chat-page">
@@ -1197,14 +1670,25 @@ function ProductionConversation({
         {loading && <MessageSkeleton />}
         {error && <section className="state-card" role="alert"><p className="eyebrow">加载失败</p><h3>暂时无法读取这条会话</h3><p>{error}</p></section>}
         {!loading && !error && !messages.length && <section className="chat-empty-state"><p className="eyebrow">空会话</p><h2>{conversation?.title || "新会话"}</h2><p>这条会话还没有消息，可以从下方输入框开始。</p></section>}
-        {messages.map((message) => message.role === "user" ? (
+        {messages.map((message) => message.role === "system" && message.content_json?.event === "organization_scope_changed" ? (
+          <div className="scope-change-divider" role="status" key={message.id}><span />{message.content}<span /></div>
+        ) : message.role === "user" ? (
           <article className="user-message" key={message.id}><span>您</span><p>{message.content}</p><time>{formatTimestamp(message.created_at, language)}</time></article>
         ) : (
           <article className={`structured-answer production-answer ${message.status === "failed" ? "failed" : ""}`} key={message.id}>
             <div className="answer-meta"><span>{message.role === "assistant" ? "AI 秘书" : message.role === "tool" ? "数据工具" : "系统"}</span><time>{formatTimestamp(message.created_at, language)}</time></div>
-            <section className="answer-conclusion"><p>{message.content || "正在等待真实处理结果…"}</p></section>
-            <MessageDetails message={message} />
+            <AssistantMessageBody
+              conversationId={conversation?.id ?? message.conversation_id}
+              message={message}
+              onFollowUp={setDraft}
+            />
             {message.status && message.status !== "completed" && <small className={`message-status ${message.status}`}>状态：{messageStatusLabel(message.status)}</small>}
+            <MessageJobActions
+              message={message}
+              job={jobs.find((item) => String(item.payload_json.assistant_message_id || "") === message.id)}
+              onCancel={() => onCancelAnswer(message.id)}
+              onRetry={() => onRetryAnswer(message.id)}
+            />
           </article>
         ))}
         {sending && <section className="processing-card" aria-live="polite"><p className="eyebrow">正在提交</p><h3>问题已进入受控处理流程</h3><p>系统不会在尚未收到真实结果时生成占位结论。</p></section>}
@@ -1216,15 +1700,13 @@ function ProductionConversation({
           draft={draft}
           setDraft={setDraft}
           sending={sending}
-          disabled={!organizationUnits.length}
+          disabled={false}
           organizationUnits={organizationUnits}
-          selectedOrganizationId={selectedOrganizationId}
-          setSelectedOrganizationId={setSelectedOrganizationId}
-          uploadedFiles={uploadedFiles}
-          uploading={uploading}
-          fileRef={fileRef}
-          onFiles={onFiles}
-          onRemoveFile={onRemoveFile}
+          organizationScope={organizationScope}
+          setOrganizationScope={setOrganizationScope}
+          authorizedModels={authorizedModels}
+          selectedModelId={selectedModelId}
+          setSelectedModelId={setSelectedModelId}
           onKeyDown={onKeyDown}
           onSubmit={onSubmit}
         />
@@ -1234,21 +1716,306 @@ function ProductionConversation({
   );
 }
 
+function AssistantMessageBody({
+  conversationId,
+  message,
+  onFollowUp,
+}: {
+  conversationId: string;
+  message: ConversationMessage;
+  onFollowUp: (question: string) => void;
+}) {
+  const envelope = parseAssistantOutput(message.content_json?.assistant_output);
+  return (
+    <>
+      {envelope
+        ? <AssistantOutputRenderer envelope={envelope} onFollowUp={onFollowUp} />
+        : <section className="answer-conclusion"><p>{message.content || "正在等待真实处理结果…"}</p></section>}
+      <MessageDetails
+        conversationId={conversationId}
+        message={message}
+        contractRendered={Boolean(envelope)}
+      />
+    </>
+  );
+}
+
+function MessageJobActions({
+  message,
+  job,
+  onCancel,
+  onRetry,
+}: {
+  message: ConversationMessage;
+  job?: Job;
+  onCancel: () => void;
+  onRetry: () => void;
+}) {
+  if (!job) return null;
+  if (
+    (message.status === "queued" || message.status === "running")
+    && (job.status === "queued" || job.status === "running")
+  ) {
+    return <div className="message-job-actions"><button type="button" onClick={onCancel}>停止处理</button></div>;
+  }
+  if (message.status === "failed" && (job.status === "failed" || job.status === "canceled")) {
+    return <div className="message-job-actions"><button type="button" onClick={onRetry}>重新尝试</button></div>;
+  }
+  return null;
+}
+
 function MessageSkeleton() {
   return <section className="message-skeleton" aria-live="polite" aria-label="正在读取会话消息"><span /><span /><span /><span /></section>;
 }
 
-function MessageDetails({ message }: { message: ConversationMessage }) {
+function humanizeMetricKey(key: string) {
+  const labels: Record<string, string> = {
+    opportunity_count: "商机数量",
+    pipeline_amount: "商机金额",
+    weighted_pipeline_amount: "加权商机",
+    delivery_count: "交付项目",
+    delivery_attention_count: "交付关注",
+    receivable_amount: "应收金额",
+    collected_amount: "已回款",
+    outstanding_amount: "未回款",
+    overdue_amount: "逾期金额",
+    weighted_forecast: "加权预测",
+    project_count: "项目数量",
+    attention_count: "关注项目",
+    contract_amount: "合同金额",
+    gross_profit_amount: "毛利金额",
+    gross_margin_rate: "毛利率",
+    name: "名称",
+    stage: "阶段",
+    bucket: "账龄",
+    organization_name: "事业部",
+    customer_alias: "客户",
+    status: "状态",
+    risk_level: "风险等级",
+    milestone: "当前里程碑",
+    delay_days: "延期天数",
+    count: "数量",
+    probability: "赢单概率",
+    progress_rate: "完成进度",
+    target_value: "目标值",
+    actual_value: "实际值",
+    completion_rate: "完成率",
+  };
+  return labels[key] ?? key.replaceAll("_", " ");
+}
+
+function formatStructuredValue(key: string, value: unknown) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value !== "number") {
+    if (typeof value !== "string") return "—";
+    const valueLabels: Record<string, string> = {
+      active: "推进中", stalled: "停滞", won: "已赢单", lost: "已输单", paused: "已暂停",
+      normal: "正常", attention: "需关注", delayed: "已延期", critical: "严重风险", high: "高风险",
+      completed: "已完成", pending: "待处理", in_progress: "进行中",
+    };
+    return valueLabels[value] ?? value;
+  }
+  if (key.endsWith("_rate") || key === "probability") return `${(value * (value <= 1 ? 100 : 1)).toFixed(1)}%`;
+  if (key === "delay_days") return `${value.toLocaleString("zh-CN")} 天`;
+  if (key.includes("amount") || key.includes("forecast")) {
+    return `${(value / 10000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 万`;
+  }
+  return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+const structuredRowKeys = [
+  "organizations",
+  "organization_units",
+  "metrics",
+  "stages",
+  "customers",
+  "projects",
+  "aging",
+  "snapshots",
+  "rows",
+  "items",
+];
+
+function findStructuredRows(value: unknown, depth = 0): unknown[] | null {
+  if (!value || depth > 4) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = findStructuredRows(item, depth + 1);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  for (const key of structuredRowKeys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate) && candidate.length > 0) return candidate;
+  }
+  for (const candidate of Object.values(record)) {
+    const nested = findStructuredRows(candidate, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function visibleStructuredEntries(record: Record<string, unknown>) {
+  return Object.entries(record)
+    .filter(([key, value]) => (
+      !key.includes("source_record_id")
+      && !key.endsWith("_id")
+      && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+    ))
+    .slice(0, 4);
+}
+
+type StructuredChartDatum = {
+  label: string;
+  value: number;
+};
+
+function buildStructuredChart(rows: unknown[]) {
+  const records = rows.filter(
+    (row): row is Record<string, unknown> => Boolean(row && typeof row === "object" && !Array.isArray(row)),
+  );
+  if (records.length < 2) return null;
+  const first = records[0];
+  const visibleKeys = Object.keys(first).filter(
+    (key) => !key.includes("source_record_id") && !key.endsWith("_id"),
+  );
+  const labelPriority = ["name", "stage", "bucket", "organization_name", "customer_alias", "risk_level", "status", "period"];
+  const labelKey = labelPriority.find((key) => typeof first[key] === "string")
+    ?? visibleKeys.find((key) => typeof first[key] === "string");
+  const numericKeys = visibleKeys.filter((key) => typeof first[key] === "number");
+  const metricKey = numericKeys.sort((left, right) => {
+    const score = (key: string) => key.includes("amount") || key.includes("forecast")
+      ? 4
+      : key.includes("count")
+        ? 3
+        : key.includes("rate") || key.includes("probability")
+          ? 2
+          : 1;
+    return score(right) - score(left);
+  })[0];
+  if (!labelKey || !metricKey) return null;
+  const items: StructuredChartDatum[] = records
+    .map((record) => ({ label: String(record[labelKey] ?? "—"), value: Number(record[metricKey]) }))
+    .filter((item) => Number.isFinite(item.value))
+    .slice(0, 8);
+  if (items.length < 2) return null;
+  return { metricKey, items };
+}
+
+function StructuredBarChart({
+  metricKey,
+  items,
+}: {
+  metricKey: string;
+  items: StructuredChartDatum[];
+}) {
+  const maximum = Math.max(...items.map((item) => Math.abs(item.value)), 0);
+  return (
+    <section className="answer-structured-chart" aria-label={`${humanizeMetricKey(metricKey)}对比图`}>
+      <header><div><small>数据对比</small><strong>{humanizeMetricKey(metricKey)}</strong></div><span>前 {items.length} 项</span></header>
+      <div>{items.map((item, index) => <article key={`${item.label}-${index}`}><span title={item.label}>{item.label}</span><i aria-hidden="true"><b style={{ width: `${maximum ? Math.max(3, Math.abs(item.value) / maximum * 100) : 0}%` }} /></i><strong>{formatStructuredValue(metricKey, item.value)}</strong></article>)}</div>
+    </section>
+  );
+}
+
+function MessageDetails({
+  conversationId,
+  message,
+  contractRendered = false,
+}: {
+  conversationId: string;
+  message: ConversationMessage;
+  contractRendered?: boolean;
+}) {
   const content = message.content_json && typeof message.content_json === "object" ? message.content_json : {};
   const metrics = Array.isArray(content.metrics) ? content.metrics.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
   const sections = Array.isArray(content.sections) ? content.sections.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
+  const structuredData = content.structured_data && typeof content.structured_data === "object" && !Array.isArray(content.structured_data) ? content.structured_data as Record<string, unknown> : {};
+  const structuredMetrics = Object.entries(structuredData)
+    .filter(([, value]) => typeof value === "number" || typeof value === "string")
+    .slice(0, 6);
+  const structuredRows = findStructuredRows(structuredData);
+  const structuredChart = Array.isArray(structuredRows) ? buildStructuredChart(structuredRows) : null;
+  const freshness = Array.isArray(content.freshness) ? content.freshness.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
   const citations = message.citations ?? (Array.isArray(content.citations) ? content.citations.filter((item): item is { label: string; source: string; as_of?: string | null } => Boolean(item && typeof item === "object" && "label" in item && "source" in item)) : []);
-  if (!metrics.length && !sections.length && !citations.length && !message.source_data_as_of && !message.model_name) return null;
+  const clarificationId = typeof content.clarification_id === "string" ? content.clarification_id : null;
+  const clarificationOptions = Array.isArray(content.options) ? content.options.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
+  const evidenceCount = typeof content.evidence_count === "number" ? content.evidence_count : 0;
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceRows, setEvidenceRows] = useState<Awaited<ReturnType<typeof productionServices.conversations.evidence>>>([]);
+  const [clarificationResolved, setClarificationResolved] = useState(false);
+  const [clarificationLoading, setClarificationLoading] = useState(false);
+  const [shareConfirmOpen, setShareConfirmOpen] = useState(false);
+  const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+
+  async function toggleEvidence() {
+    const next = !evidenceOpen;
+    setEvidenceOpen(next);
+    if (!next || evidenceRows.length || evidenceLoading) return;
+    setEvidenceLoading(true);
+    try {
+      setEvidenceRows(await productionServices.conversations.evidence(conversationId, message.id));
+    } finally {
+      setEvidenceLoading(false);
+    }
+  }
+
+  async function resolveClarification(value: string) {
+    if (!clarificationId || clarificationLoading) return;
+    setClarificationLoading(true);
+    try {
+      await productionServices.conversations.resolveClarification(conversationId, clarificationId, value);
+      setClarificationResolved(true);
+    } finally {
+      setClarificationLoading(false);
+    }
+  }
+
+  async function shareDiagnostic() {
+    if (shareBusy) return;
+    setShareBusy(true);
+    try {
+      const result = await productionServices.conversations.shareDiagnostic(conversationId, message.id);
+      setShareExpiresAt(result.expires_at);
+      setShareConfirmOpen(false);
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function revokeDiagnosticShare() {
+    if (shareBusy) return;
+    setShareBusy(true);
+    try {
+      await productionServices.conversations.revokeDiagnosticShare(conversationId, message.id);
+      setShareExpiresAt(null);
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  if (!metrics.length && !sections.length && !structuredMetrics.length && !Array.isArray(structuredRows) && !citations.length && !freshness.length && !clarificationId && !message.source_data_as_of && !message.model_name && message.role !== "assistant") return null;
   return (
     <div className="production-message-details">
-      {metrics.length > 0 && <dl className="answer-metric-grid">{metrics.slice(0, 6).map((metric, index) => <div key={`${String(metric.label)}-${index}`}><dt>{String(metric.label ?? "指标")}</dt><dd>{String(metric.value ?? "—")}</dd>{metric.note ? <small>{String(metric.note)}</small> : null}</div>)}</dl>}
-      {sections.length > 0 && <div className="answer-section-list">{sections.slice(0, 8).map((section, index) => <section key={`${String(section.title)}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{String(section.title ?? "分析")}</strong>{section.content || section.detail ? <p>{String(section.content ?? section.detail)}</p> : null}</div></section>)}</div>}
-      {(citations.length > 0 || message.source_data_as_of || message.model_name) && <details className="answer-evidence"><summary>来源与处理信息</summary><dl>{message.source_data_as_of && <div><dt>数据截至</dt><dd>{formatTimestamp(message.source_data_as_of)}</dd></div>}{message.model_name && <div><dt>处理模型</dt><dd>{message.model_name}</dd></div>}{citations.map((citation, index) => <div key={`${citation.source}-${index}`}><dt>{citation.label}</dt><dd>{citation.source}{citation.as_of ? ` · ${citation.as_of}` : ""}</dd></div>)}</dl></details>}
+      {!contractRendered && metrics.length > 0 && <dl className="answer-metric-grid">{metrics.slice(0, 6).map((metric, index) => <div key={`${String(metric.label)}-${index}`}><dt>{String(metric.label ?? "指标")}</dt><dd>{String(metric.value ?? "—")}</dd>{metric.note ? <small>{String(metric.note)}</small> : null}</div>)}</dl>}
+      {!contractRendered && structuredMetrics.length > 0 && <dl className="answer-metric-grid">{structuredMetrics.map(([key, value]) => <div key={key}><dt>{humanizeMetricKey(key)}</dt><dd>{formatStructuredValue(key, value)}</dd></div>)}</dl>}
+      {!contractRendered && structuredChart && <StructuredBarChart metricKey={structuredChart.metricKey} items={structuredChart.items} />}
+      {!contractRendered && Array.isArray(structuredRows) && structuredRows.length > 0 && <div className="answer-structured-table">{structuredRows.slice(0, 12).map((row, index) => { const record: Record<string, unknown> = row && typeof row === "object" && !Array.isArray(row) ? row as Record<string, unknown> : { value: row }; return <article key={`${index}-${String(record.source_record_id ?? record.name ?? record.stage ?? record.bucket ?? record.organization_name ?? "row")}`}><span>{String(index + 1).padStart(2, "0")}</span><div>{visibleStructuredEntries(record).map(([key, value]) => <p key={key}><small>{humanizeMetricKey(key)}</small><strong>{formatStructuredValue(key, value)}</strong></p>)}</div></article>; })}</div>}
+      {!contractRendered && sections.length > 0 && <div className="answer-section-list">{sections.slice(0, 8).map((section, index) => <section key={`${String(section.title)}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{String(section.title ?? "分析")}</strong>{section.content || section.detail ? <p>{String(section.content ?? section.detail)}</p> : null}</div></section>)}</div>}
+      {clarificationId && !clarificationResolved && <section className="clarification-options"><small>请确认后继续</small><div>{clarificationOptions.map((option, index) => { const label = String(option.label ?? option.value ?? `选项 ${index + 1}`); const value = String(option.value ?? option.label ?? ""); return <button type="button" key={`${value}-${index}`} disabled={!value || clarificationLoading} onClick={() => void resolveClarification(value)}>{label}<span aria-hidden="true">›</span></button>; })}</div>{!clarificationOptions.length && <p>请在输入框中补充需要查询的事业部范围。</p>}</section>}
+      {clarificationResolved && <p className="clarification-resolved">已确认范围，正在继续处理。</p>}
+      {((!contractRendered && (freshness.length > 0 || citations.length > 0 || message.source_data_as_of)) || message.model_name) && <details className="answer-evidence"><summary>{contractRendered ? "处理信息" : "来源与数据时间"}</summary><dl>{!contractRendered && message.source_data_as_of && <div><dt>数据截至</dt><dd>{formatTimestamp(message.source_data_as_of)}</dd></div>}{!contractRendered && freshness.map((item, index) => <div key={`${String(item.domain)}-${index}`}><dt>{domainLabels[String(item.domain)] ?? String(item.domain ?? "数据")}</dt><dd>{professionalSourceLabel(String(item.source_display_name ?? "未知来源"))} · {formatTimestamp(typeof item.source_data_as_of === "string" ? item.source_data_as_of : null)} · {item.status === "fresh" ? "最新" : String(item.status ?? "")}</dd></div>)}{!contractRendered && citations.map((citation, index) => <div key={`${citation.source}-${index}`}><dt>{citation.label}</dt><dd>{citation.source}{citation.as_of ? ` · ${citation.as_of}` : ""}</dd></div>)}{message.model_name && <div><dt>处理模型</dt><dd>{message.model_name}</dd></div>}</dl></details>}
+      {evidenceCount > 0 && <section className="numeric-evidence"><button type="button" onClick={() => void toggleEvidence()}><span>{evidenceOpen ? "收起数字依据" : `查看数字依据（${evidenceCount}）`}</span><i aria-hidden="true">{evidenceOpen ? "⌃" : "⌄"}</i></button>{evidenceOpen && <div>{evidenceLoading ? <small>正在读取受控证据…</small> : evidenceRows.map((evidence) => <article key={evidence.id}><header><strong>{domainLabels[evidence.domain] ?? evidence.domain}</strong><span>{professionalSourceLabel(evidence.source_display_name)}</span></header><p>数据截至 {formatTimestamp(evidence.source_data_as_of)}{evidence.dataset_version ? ` · ${evidence.dataset_version}` : ""}</p><small>{evidence.row_references_json.length ? `${evidence.row_references_json.length} 条源记录引用` : "聚合结果来自当前激活数据版本"}</small></article>)}</div>}</section>}
+      {message.role === "assistant" && message.status === "completed" && <section className="diagnostic-share-control">
+        {shareExpiresAt ? <><span>本次诊断已临时共享至 {formatTimestamp(shareExpiresAt)}</span><button type="button" disabled={shareBusy} onClick={() => void revokeDiagnosticShare()}>提前撤销</button></> : <button type="button" onClick={() => setShareConfirmOpen(true)}>共享本次诊断</button>}
+        {shareConfirmOpen && <div className="diagnostic-share-confirm" role="alertdialog" aria-label="确认共享本次诊断"><strong>向管理员共享 24 小时？</strong><p>仅共享这条问题、改写、执行计划与回答；不会共享长期记忆或其他会话。</p><div><button type="button" disabled={shareBusy} onClick={() => setShareConfirmOpen(false)}>取消</button><button type="button" disabled={shareBusy} onClick={() => void shareDiagnostic()}>{shareBusy ? "正在授权…" : "确认共享"}</button></div></div>}
+      </section>}
     </div>
   );
 }
@@ -1261,13 +2028,11 @@ function ProductionComposer({
   sending,
   disabled,
   organizationUnits,
-  selectedOrganizationId,
-  setSelectedOrganizationId,
-  uploadedFiles,
-  uploading,
-  fileRef,
-  onFiles,
-  onRemoveFile,
+  organizationScope,
+  setOrganizationScope,
+  authorizedModels,
+  selectedModelId,
+  setSelectedModelId,
   onKeyDown,
   onSubmit,
 }: {
@@ -1278,31 +2043,48 @@ function ProductionComposer({
   sending: boolean;
   disabled: boolean;
   organizationUnits: OrganizationUnit[];
-  selectedOrganizationId: string;
-  setSelectedOrganizationId: (value: string) => void;
-  uploadedFiles: FileMetadata[];
-  uploading: boolean;
-  fileRef: React.RefObject<HTMLInputElement | null>;
-  onFiles: (event: ChangeEvent<HTMLInputElement>) => void;
-  onRemoveFile: (file: FileMetadata) => void;
+  organizationScope: OrganizationScope;
+  setOrganizationScope: (value: OrganizationScope) => void;
+  authorizedModels: AuthorizedModel[];
+  selectedModelId: string;
+  setSelectedModelId: (value: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: (event: FormEvent) => void;
 }) {
   const c = copy[language];
+  const selectedModelIsAuthorized = authorizedModels.some((model) => model.model_id === selectedModelId);
+  const selectedModelLabel = authorizedModels.find((model) => model.model_id === selectedModelId)?.display_name
+    ?? (selectedModelId ? "原模型已取消授权" : "暂无可用模型");
   return (
     <form className="composer workbench-composer home-primary-composer production-composer" onSubmit={onSubmit}>
       <label className="sr-only" htmlFor={id}>输入经营问题</label>
-      <textarea id={id} rows={2} maxLength={COMPOSER_MAX_LENGTH} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} placeholder={disabled ? "尚未配置可分析事业部" : c.placeholder} disabled={disabled} />
-      {uploadedFiles.length > 0 && <div className="composer-file-list" aria-label="待发送文件">{uploadedFiles.map((file) => <span key={file.id}><UiIcon name="file" /><strong>{file.original_name}</strong><small>{file.status}</small><button type="button" aria-label={`移除 ${file.original_name}`} onClick={() => onRemoveFile(file)}>×</button></span>)}</div>}
+      <textarea id={id} rows={2} maxLength={COMPOSER_MAX_LENGTH} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} placeholder={c.placeholder} disabled={disabled} />
       <div className="composer-footer">
         <div className="composer-tools">
-          <input ref={fileRef} className="sr-only" type="file" multiple accept=".pdf,.docx,.xlsx,.pptx" onChange={onFiles} />
-          <button type="button" className="composer-tool-button" onClick={() => fileRef.current?.click()} disabled={disabled || uploading}><span aria-hidden="true">＋</span><span>{uploading ? "上传中…" : c.file}</span></button>
-          <OrganizationPicker language={language} units={organizationUnits} value={selectedOrganizationId} onChange={setSelectedOrganizationId} disabled={disabled} />
+          <OrganizationPicker language={language} units={organizationUnits} value={organizationScope} onChange={setOrganizationScope} disabled={!organizationUnits.length} />
         </div>
         <div className="composer-send">
           {draft.length >= COMPOSER_HINT_THRESHOLD && <span className="composer-character-count">{language === "en" ? `${(COMPOSER_MAX_LENGTH - draft.length).toLocaleString("en")} characters remaining` : `还可输入 ${(COMPOSER_MAX_LENGTH - draft.length).toLocaleString(language)} 字`}</span>}
-          <button className="composer-submit-button" type="submit" disabled={disabled || sending || !draft.trim()} aria-label="发送问题">↑</button>
+          <label className="composer-model-picker">
+            <span className="sr-only">当前模型</span>
+            <span className="composer-model-value" aria-hidden="true">{selectedModelLabel}</span>
+            <span className="composer-model-chevron" aria-hidden="true">⌄</span>
+            <select
+              value={selectedModelId}
+              disabled={!authorizedModels.length || sending}
+              onChange={(event) => setSelectedModelId(event.target.value)}
+              aria-label="选择本会话使用的模型"
+            >
+              {!authorizedModels.length && <option value="">管理员尚未授权模型</option>}
+              {selectedModelId && !selectedModelIsAuthorized && (
+                <option value={selectedModelId} disabled>原模型已取消授权，请重新选择</option>
+              )}
+              {authorizedModels.map((model) => (
+                <option key={model.model_id} value={model.model_id}>{model.display_name}</option>
+              ))}
+            </select>
+          </label>
+          <button className="composer-submit-button" type="submit" disabled={disabled || sending || !draft.trim() || !selectedModelIsAuthorized} aria-label="发送问题">↑</button>
         </div>
       </div>
     </form>
@@ -1318,40 +2100,81 @@ function OrganizationPicker({
 }: {
   language: UiLanguage;
   units: OrganizationUnit[];
-  value: string;
-  onChange: (value: string) => void;
+  value: OrganizationScope;
+  onChange: (value: OrganizationScope) => void;
   disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [draftScope, setDraftScope] = useState<OrganizationScope>(value);
   const rootRef = useRef<HTMLDivElement>(null);
   const c = copy[language];
-  const label = value === ALL_SCOPE_ID ? c.scope : units.find((unit) => unit.id === value)?.name ?? c.scope;
+  const label = scopeLabel(value, units, language);
   const filtered = units.filter((unit) => unit.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const selectedIds = new Set(draftScope.mode === "selected" ? draftScope.organization_unit_ids : units.map((unit) => unit.id));
+  const selectedCount = draftScope.mode === "all_authorized" ? units.length : draftScope.organization_unit_ids.length;
+
+  const closeWithoutApplying = useCallback(() => {
+    setDraftScope(value);
+    setQuery("");
+    setOpen(false);
+  }, [value]);
+
+  function toggleOpen() {
+    if (open) {
+      closeWithoutApplying();
+      return;
+    }
+    setDraftScope({ mode: value.mode, organization_unit_ids: [...value.organization_unit_ids] });
+    setOpen(true);
+  }
+
+  function toggleUnit(unitId: string) {
+    if (draftScope.mode === "all_authorized") {
+      setDraftScope({ mode: "selected", organization_unit_ids: [unitId] });
+      return;
+    }
+    const current = draftScope.organization_unit_ids;
+    const next = current.includes(unitId)
+      ? current.filter((id) => id !== unitId)
+      : [...current, unitId];
+    if (next.length === units.length) {
+      setDraftScope(ALL_ORGANIZATIONS_SCOPE);
+    } else {
+      setDraftScope({ mode: "selected", organization_unit_ids: next });
+    }
+  }
+
+  function apply() {
+    if (selectedCount < 1) return;
+    onChange({ mode: draftScope.mode, organization_unit_ids: [...draftScope.organization_unit_ids] });
+    setQuery("");
+    setOpen(false);
+  }
 
   useEffect(() => {
     if (!open) return;
     const close = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) closeWithoutApplying();
     };
-    const escape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const escape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") closeWithoutApplying(); };
     window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); };
-  }, [open]);
+  }, [closeWithoutApplying, open]);
 
   return (
     <div ref={rootRef} className="organization-picker">
-      <button type="button" className="composer-tool-button scope" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><UiIcon name="organization" /><span>{label}</span><span className="organization-picker-chevron" aria-hidden="true">⌄</span></button>
+      <button type="button" className="composer-tool-button scope" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}，选择经营数据范围`} title={draftScope.mode === "selected" ? draftScope.organization_unit_ids.map((id) => units.find((unit) => unit.id === id)?.name).filter(Boolean).join("、") : c.scope} onClick={toggleOpen}><UiIcon name="organization" /><span>{label}</span><span className="organization-picker-chevron" aria-hidden="true">⌄</span></button>
       {open && <div className="organization-popover">
         <header><strong>{language === "en" ? "Business unit scope" : "选择事业部"}</strong></header>
         {units.length > 5 && <label className="organization-search"><UiIcon name="search" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={language === "en" ? "Search business units" : "搜索事业部"} autoFocus /></label>}
-        <div className="organization-options" role="listbox" aria-label="可分析事业部">
-          <button type="button" role="option" aria-selected={value === ALL_SCOPE_ID} className={value === ALL_SCOPE_ID ? "selected" : ""} onClick={() => { onChange(ALL_SCOPE_ID); setOpen(false); }}><span className="organization-check">{value === ALL_SCOPE_ID ? "✓" : ""}</span><span>{c.scope}</span><UiIcon name="organization" /></button>
-          {filtered.map((unit) => <button type="button" role="option" aria-selected={value === unit.id} className={value === unit.id ? "selected" : ""} key={unit.id} onClick={() => { onChange(unit.id); setOpen(false); }}><span className="organization-check">{value === unit.id ? "✓" : ""}</span><span>{unit.name}</span><UiIcon name="organization" /></button>)}
+        <div className="organization-options" role="listbox" aria-multiselectable="true" aria-label="可分析事业部">
+          <button type="button" role="option" aria-selected={draftScope.mode === "all_authorized"} className={draftScope.mode === "all_authorized" ? "selected" : ""} onClick={() => setDraftScope(ALL_ORGANIZATIONS_SCOPE)}><span className="organization-check">{draftScope.mode === "all_authorized" ? "✓" : ""}</span><span>{c.scope}</span><UiIcon name="organization" /></button>
+          {filtered.map((unit) => <button type="button" role="option" aria-selected={draftScope.mode === "selected" && selectedIds.has(unit.id)} className={selectedIds.has(unit.id) && draftScope.mode === "selected" ? "selected" : ""} key={unit.id} onClick={() => toggleUnit(unit.id)}><span className="organization-check">{selectedIds.has(unit.id) && draftScope.mode === "selected" ? "✓" : ""}</span><span>{unit.name}</span><UiIcon name="organization" /></button>)}
           {!filtered.length && <p className="organization-empty">没有匹配的事业部</p>}
         </div>
-        <footer><small>可选范围由企业管理员配置</small><span>{units.length} 个可分析事业部</span></footer>
+        <footer><small>可选范围由企业管理员配置</small><span>{selectedCount} / {units.length} 已选</span><button type="button" className="organization-apply" disabled={selectedCount < 1} onClick={apply}>{language === "en" ? "Apply" : "应用"}</button></footer>
       </div>}
     </div>
   );
@@ -1370,6 +2193,9 @@ function WorkspaceDetailPanel({
   conversations,
   memories,
   organizationUnits,
+  dataCapabilities,
+  dailyBrief,
+  dailyBriefStatus,
   language,
   memoryEnabled,
   setMemoryEnabled,
@@ -1390,6 +2216,9 @@ function WorkspaceDetailPanel({
   conversations: Conversation[];
   memories: Memory[];
   organizationUnits: OrganizationUnit[];
+  dataCapabilities: DataCapabilities | null;
+  dailyBrief: DailyBrief | null;
+  dailyBriefStatus: DailyBriefLoadState["status"];
   language: UiLanguage;
   memoryEnabled: boolean;
   setMemoryEnabled: (value: boolean) => void;
@@ -1415,10 +2244,14 @@ function WorkspaceDetailPanel({
       <aside className={`workspace-detail-panel ${reportPanel ? "report-detail-panel" : ""}`} role="dialog" aria-modal="true" aria-labelledby="production-panel-title">
         <header><div><h2 id="production-panel-title">{titles[panel]}</h2><small>工作台下钻</small></div><div className="panel-header-actions"><button type="button" className="panel-close-button" onClick={onClose} aria-label="关闭面板">×</button></div></header>
         <div className="workspace-detail-scroll">
-          {reportPanel && <ProductionReportPanel kind={panel} report={report} loading={reportLoading} reports={reports} language={language} onSelectReport={onSelectReport} />}
+          {panel === "daily"
+            ? dailyBrief
+              ? <ProductionDailyBriefPanel brief={dailyBrief} language={language} />
+              : <div className="production-report-empty"><EmptyState title={dailyBriefStatus === "loading" ? "正在核对今日事项" : "晨间简报暂不可用"} description={dailyBriefStatus === "loading" ? "系统正在读取当前事业部范围的最新经营快照。" : "请先检查数据状态；系统不会使用其他事业部或历史样本替代当前范围。"} /></div>
+            : reportPanel && <ProductionReportPanel kind={panel} report={report} loading={reportLoading} reports={reports} language={language} onSelectReport={onSelectReport} />}
           {panel === "history" && <ProductionHistoryPanel conversations={conversations} language={language} onOpen={onOpenConversation} onNew={onNewConversation} onRename={onRenameConversation} onArchive={onArchiveConversation} />}
           {panel === "memory" && <ProductionMemoryPanel memories={memories} organizationUnits={organizationUnits} enabled={memoryEnabled} setEnabled={setMemoryEnabled} onCreate={onCreateMemory} onUpdate={onUpdateMemory} onDelete={onDeleteMemory} />}
-          {panel === "scope" && <ProductionScopePanel organizationUnits={organizationUnits} />}
+          {panel === "scope" && <ProductionScopePanel organizationUnits={organizationUnits} dataCapabilities={dataCapabilities} />}
         </div>
       </aside>
     </div>
@@ -1531,10 +2364,20 @@ function ProductionMemoryPanel({
   );
 }
 
-function ProductionScopePanel({ organizationUnits }: { organizationUnits: OrganizationUnit[] }) {
+function ProductionScopePanel({
+  organizationUnits,
+  dataCapabilities,
+}: {
+  organizationUnits: OrganizationUnit[];
+  dataCapabilities: DataCapabilities | null;
+}) {
   return (
     <div className="page subpage production-scope-page">
       <section className="page-heading"><p className="eyebrow">服务端授权结果</p><h1>可查询范围</h1><p>这里仅展示已经接入数据、已启用分析并且当前账号获准访问的事业部。前端不能自行添加。</p></section>
+      <section className={`data-capability-summary ${dataCapabilities?.overall_status ?? "unavailable"}`}>
+        <header><div><span className="status-dot" aria-hidden="true" /><div><strong>{dataStatusLabel(dataCapabilities)}</strong><small>{dataCapabilities ? professionalSourceLabel(dataCapabilities.source_label) : "尚未配置数据源"}</small></div></div><time>{dataCapabilities ? `状态生成于 ${formatTimestamp(dataCapabilities.generated_at)}` : "—"}</time></header>
+        {dataCapabilities?.domains.length ? <div className="data-domain-grid">{dataCapabilities.domains.map((domain) => <article key={domain.domain}><span>{domainLabels[domain.domain] ?? domain.domain}</span><strong>{domain.record_count.toLocaleString("zh-CN")} 条</strong><small>数据截至 {formatTimestamp(domain.source_data_as_of)}</small><i className={domain.status}>{domain.status === "fresh" ? "最新" : domain.status === "stale" ? "较旧" : domain.status === "failed" ? "失败" : "部分可用"}</i>{domain.last_error_message && <p>{domain.last_error_message}</p>}</article>)}</div> : <p className="data-capability-empty">首次数据同步完成后，将按商机、交付、回款和目标分别展示状态。</p>}
+      </section>
       {organizationUnits.length ? <div className="scope-unit-list">{organizationUnits.map((unit) => <article key={unit.id}><span className="scope-unit-mark" aria-hidden="true" /><div><strong>{unit.name}</strong><small>{unit.code} · {unit.unit_type}</small></div><span className="scope-unit-status">数据可用</span></article>)}</div> : <EmptyState title="尚未配置可分析事业部" description="请由企业管理员完成数据连接、启用分析并授予当前账号访问范围。" />}
       <aside className="scope-security-note"><UiIcon name="shield" /><div><strong>范围由服务端控制</strong><p>创建会话、生成任务和读取资源时都会再次校验权限，不依赖前端选择结果。</p></div></aside>
     </div>
@@ -1559,6 +2402,60 @@ function recordItems(record: Record<string, unknown>, keys: string[]) {
     if (Array.isArray(value)) return value.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item));
   }
   return [];
+}
+
+function ProductionDailyBriefPanel({ brief, language }: { brief: DailyBrief; language: UiLanguage }) {
+  const asOf = dailyBriefDataAsOf(brief);
+  const canConcludeNoItems = brief.readiness === "ready" || brief.readiness === "stale";
+  const domainLabel = (domain: string) => domainLabels[domain] ?? domain;
+  const readinessLabel = (readiness: string) => {
+    if (language === "en") return readiness === "ready" ? "Ready" : readiness === "stale" ? "Older data" : readiness === "partial" ? "Partial" : "Unavailable";
+    if (language === "zh-TW") return readiness === "ready" ? "已就緒" : readiness === "stale" ? "數據較早" : readiness === "partial" ? "部分可用" : "暫不可用";
+    return readiness === "ready" ? "已就绪" : readiness === "stale" ? "数据较早" : readiness === "partial" ? "部分可用" : "暂不可用";
+  };
+  const metaLabel = language === "en" ? "Morning executive brief" : language === "zh-TW" ? "晨間經營摘要" : "晨间经营摘要";
+  const explanation = language === "en"
+    ? "Only material items that require an executive confirmation are shown here."
+    : language === "zh-TW"
+      ? "僅呈現需要高層確認的實質事項，不以普通變化補足數量。"
+      : "仅呈现需要高层确认的实质事项，不以普通变化补足数量。";
+
+  return (
+    <article className="executive-report production-executive-report daily live-daily-brief">
+      <header className="executive-report-lead">
+        <div className="executive-report-meta">
+          <div><span>{metaLabel}</span><time>{brief.brief_date ? formatDate(brief.brief_date, language) : "—"}</time></div>
+          <p>{asOf ? `${language === "en" ? "Data through" : language === "zh-TW" ? "數據截至" : "数据截至"} ${formatTimestamp(asOf, language)}` : readinessLabel(brief.readiness)}</p>
+        </div>
+        <h1>{dailyBriefHeadline(brief, language)}</h1>
+        <p>{explanation}</p>
+      </header>
+
+      {brief.items.length > 0 ? (
+        <section className="live-daily-brief-items" aria-label={language === "en" ? "Items needing attention" : "需要确认的事项"}>
+          {brief.items.map((item) => (
+            <article key={item.rule_id}>
+              <span className="morning-brief-dot" aria-hidden="true" />
+              <div><small>{domainLabel(item.domain)}</small><strong>{item.title}</strong><p>{item.detail}</p></div>
+              <b>{item.affected_count}</b>
+            </article>
+          ))}
+        </section>
+      ) : canConcludeNoItems ? (
+        <section className="live-daily-brief-clear"><span aria-hidden="true">✓</span><p>{language === "en" ? "No material confirmation item was identified for the current scope." : language === "zh-TW" ? "目前範圍內未識別到需要確認的重大事項。" : "当前范围内未识别到需要确认的重大事项。"}</p></section>
+      ) : (
+        <section className="live-daily-brief-clear uncertain"><span aria-hidden="true">!</span><p>{language === "en" ? "The current data is incomplete, so the system cannot confirm that there are no action items." : language === "zh-TW" ? "目前數據不完整，暫不能確認沒有需要處理的事項。" : "当前数据不完整，暂不能确认没有需要处理的事项。"}</p></section>
+      )}
+
+      <details className="executive-report-provenance">
+        <summary>{language === "en" ? "Data scope and readiness" : language === "zh-TW" ? "數據範圍與就緒度" : "数据范围与就绪度"}</summary>
+        <dl>
+          <div><dt>{language === "en" ? "Scope" : "范围"}</dt><dd>{brief.uses_enterprise_snapshot ? (language === "en" ? "All authorized business units" : language === "zh-TW" ? "全部授權事業部" : "全部授权事业部") : language === "en" ? `${brief.organization_unit_ids.length} business units` : language === "zh-TW" ? `${brief.organization_unit_ids.length} 個事業部` : `${brief.organization_unit_ids.length} 个事业部`}</dd></div>
+          {brief.domains.map((domain) => <div key={domain.domain}><dt>{domainLabel(domain.domain)}</dt><dd>{readinessLabel(domain.readiness)} · {domain.record_count.toLocaleString(language)}{language === "en" ? " records" : language === "zh-TW" ? " 條" : " 条"}{domain.data_as_of ? ` · ${formatTimestamp(domain.data_as_of, language)}` : ""}</dd></div>)}
+        </dl>
+      </details>
+    </article>
+  );
 }
 
 function ProductionReportPanel({
@@ -1647,7 +2544,7 @@ function PreferencesWindow({
   setTheme: (theme: ThemePreference) => void;
   language: UiLanguage;
   profilePreferences: ProfilePreferences;
-  setProfilePreferences: (value: ProfilePreferences) => void;
+  setProfilePreferences: (value: ProfilePreferences) => Promise<boolean>;
   memoryEnabled: boolean;
   setMemoryEnabled: (value: boolean) => void;
   memories: Memory[];
@@ -1659,6 +2556,9 @@ function PreferencesWindow({
   const [editing, setEditing] = useState(false);
   const [salutation, setSalutation] = useState(profilePreferences.salutation);
   const [amountUnit, setAmountUnit] = useState(profilePreferences.amountUnit);
+  const [responseStyle, setResponseStyle] = useState(profilePreferences.responseStyle);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState("");
   const labels = language === "en"
     ? { title: "Personal settings", back: "Back to workspace", profile: "Profile", appearance: "Appearance", memory: "Long-term memory", close: "Close" }
     : language === "zh-TW"
@@ -1692,10 +2592,14 @@ function PreferencesWindow({
     };
   }, [onClose]);
 
-  function savePreferences(event: FormEvent) {
+  async function savePreferences(event: FormEvent) {
     event.preventDefault();
-    setProfilePreferences({ salutation: salutation.trim() || "董事长", amountUnit });
-    setEditing(false);
+    setProfileSaving(true);
+    setProfileError("");
+    const saved = await setProfilePreferences({ salutation: salutation.trim() || "董事长", amountUnit, responseStyle });
+    setProfileSaving(false);
+    if (saved) setEditing(false);
+    else setProfileError("暂时无法保存，请稍后重试。");
   }
 
   return (
@@ -1717,10 +2621,10 @@ function PreferencesWindow({
           <header className="preferences-main-header"><div><small>{labels.title}</small><strong>{view === "profile" ? labels.profile : view === "appearance" ? labels.appearance : labels.memory}</strong></div><button type="button" onClick={onClose} aria-label={labels.close}>×</button></header>
 
           {view === "profile" && <div className="profile-settings-pane production-profile-pane">
-            <section className="profile-hero"><span className="profile-hero-avatar" aria-hidden="true">{initials}</span><div><h1>{preferredDisplayName(me)}</h1><p>{profilePreferences.salutation} · {selectedScopeLabel}</p><small>{me.user.email}</small></div>{!editing && <button type="button" className="profile-edit-button" onClick={() => { setSalutation(profilePreferences.salutation); setAmountUnit(profilePreferences.amountUnit); setEditing(true); }}><UiIcon name="edit" />编辑服务偏好</button>}</section>
-            <section className="profile-summary-rail" aria-label="账号摘要"><div><small>专属称呼</small><strong>{profilePreferences.salutation}</strong><span>用于首页问候</span></div><div><small>可分析事业部</small><strong>{organizationUnits.length} 个</strong><span>由服务端授权决定</span></div><div><small>默认金额单位</small><strong>{profilePreferences.amountUnit}</strong><span>用于界面表达偏好</span></div></section>
-            {editing ? <form className="profile-edit-form" onSubmit={savePreferences}><div className="profile-section-title"><span>编辑服务偏好</span><small>不会改变账号和数据权限</small></div><div className="profile-form-grid"><label><span>专属称呼</span><input value={salutation} maxLength={24} onChange={(event) => setSalutation(event.target.value)} placeholder="例如：张总、Ryan" autoFocus /></label><label><span>默认金额单位</span><select value={amountUnit} onChange={(event) => setAmountUnit(event.target.value)}><option>万元</option><option>亿元</option><option>元</option></select></label></div><div className="profile-form-actions"><button type="button" onClick={() => setEditing(false)}>取消</button><button type="submit">保存偏好</button></div></form> : <div className="profile-detail-grid"><section><div className="profile-section-title"><span>服务偏好</span><small>只影响界面表达</small></div><dl><div><dt>问候预览</dt><dd>早上好，{profilePreferences.salutation}</dd></div><div><dt>回答原则</dt><dd>先给结论，再展开依据</dd></div><div><dt>金额表达</dt><dd>{profilePreferences.amountUnit}</dd></div></dl></section><section><div className="profile-section-title"><span>账号与安全</span><small>正式身份信息</small></div><dl><div><dt>登录邮箱</dt><dd>{me.user.email}</dd></div><div><dt>角色</dt><dd>{me.user.role}</dd></div><div><dt>账号状态</dt><dd><span className="profile-status-dot" />正常</dd></div></dl></section></div>}
-            <p className="production-profile-note">显示名称与登录邮箱属于正式身份信息，由企业管理员维护；这里不会用浏览器数据覆盖。</p>
+            <section className="profile-hero"><span className="profile-hero-avatar" aria-hidden="true">{initials}</span><div><h1>{preferredDisplayName(me)}</h1><p>{profilePreferences.salutation} · {selectedScopeLabel}</p><small>{me.user.email}</small></div>{!editing && <button type="button" className="profile-edit-button" onClick={() => { setSalutation(profilePreferences.salutation); setAmountUnit(profilePreferences.amountUnit); setResponseStyle(profilePreferences.responseStyle); setEditing(true); }}><UiIcon name="edit" />编辑服务偏好</button>}</section>
+            <section className="profile-summary-rail" aria-label="账号摘要"><div><small>专属称呼</small><strong>{profilePreferences.salutation}</strong><span>用于首页问候</span></div><div><small>可分析事业部</small><strong>{organizationUnits.length} 个</strong><span>由服务端授权决定</span></div><div><small>默认金额单位</small><strong>{profilePreferences.amountUnit === "yi" ? "亿元" : profilePreferences.amountUnit === "yuan" ? "元" : "万元"}</strong><span>用于回答表达</span></div></section>
+            {editing ? <form className="profile-edit-form" onSubmit={(event) => void savePreferences(event)}><div className="profile-section-title"><span>编辑服务偏好</span><small>加密保存在您的个人配置中</small></div><div className="profile-form-grid"><label><span>专属称呼</span><input value={salutation} maxLength={24} onChange={(event) => setSalutation(event.target.value)} placeholder="例如：张总、Ryan" autoFocus /></label><label><span>默认金额单位</span><select value={amountUnit} onChange={(event) => setAmountUnit(event.target.value as ProfilePreferences["amountUnit"])}><option value="wan">万元</option><option value="yi">亿元</option><option value="yuan">元</option></select></label><label><span>回答风格</span><select value={responseStyle} onChange={(event) => setResponseStyle(event.target.value as ProfilePreferences["responseStyle"])}><option value="concise">简洁</option><option value="balanced">均衡</option><option value="detailed">详细</option></select></label></div>{profileError && <p className="anspire-error" role="alert">{profileError}</p>}<div className="profile-form-actions"><button type="button" disabled={profileSaving} onClick={() => setEditing(false)}>取消</button><button type="submit" disabled={profileSaving}>{profileSaving ? "正在保存…" : "保存偏好"}</button></div></form> : <div className="profile-detail-grid"><section><div className="profile-section-title"><span>服务偏好</span><small>仅您本人可读写</small></div><dl><div><dt>问候预览</dt><dd>早上好，{profilePreferences.salutation}</dd></div><div><dt>回答风格</dt><dd>{profilePreferences.responseStyle === "concise" ? "简洁" : profilePreferences.responseStyle === "detailed" ? "详细" : "均衡"}</dd></div><div><dt>金额表达</dt><dd>{profilePreferences.amountUnit === "yi" ? "亿元" : profilePreferences.amountUnit === "yuan" ? "元" : "万元"}</dd></div></dl></section><section><div className="profile-section-title"><span>账号与安全</span><small>正式身份信息</small></div><dl><div><dt>登录邮箱</dt><dd>{me.user.email}</dd></div><div><dt>角色</dt><dd>{me.user.role}</dd></div><div><dt>账号状态</dt><dd><span className="profile-status-dot" />正常</dd></div></dl></section></div>}
+            <p className="production-profile-note">称呼、金额单位与回答偏好已迁移至服务端加密个人配置；企业管理员无法读取其正文。</p>
           </div>}
 
           {view === "appearance" && <div className="appearance-settings-pane"><header><p className="eyebrow">界面显示</p><h1>选择适合您的外观</h1><p>外观偏好只保存在当前设备，不影响会话、数据或长期记忆。</p></header><div className="appearance-options" role="radiogroup" aria-label="外观模式">{([
@@ -1801,6 +2705,60 @@ function ProjectDialog({
   );
 }
 
+function ConversationProjectDialog({
+  conversation,
+  projects,
+  onClose,
+  onMove,
+}: {
+  conversation: Conversation | null;
+  projects: Project[];
+  onClose: () => void;
+  onMove: (projectId: string | null) => Promise<boolean>;
+}) {
+  const [query, setQuery] = useState("");
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const visibleProjects = projects.filter((project) => (
+    project.id !== conversation?.project_id
+    && project.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
+  ));
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    window.requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLInputElement>("input")?.focus());
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); previouslyFocused?.focus(); };
+  }, [onClose]);
+
+  async function move(projectId: string | null) {
+    setSubmittingId(projectId ?? "unassigned");
+    const moved = await onMove(projectId);
+    if (!moved) setSubmittingId(null);
+  }
+
+  return (
+    <div className="project-dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={dialogRef} className="project-dialog conversation-project-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-project-dialog-title">
+        <header><div><small>会话归属</small><h2 id="conversation-project-dialog-title">移到项目</h2></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
+        <div className="conversation-project-dialog-body">
+          <p>“{conversation?.title || "未命名会话"}”一次只归属一个项目，历史消息、模型和证据不会改变。</p>
+          <label><span className="sr-only">搜索项目</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目" /></label>
+          <div className="conversation-project-options">
+            {conversation?.project_id && <button type="button" disabled={Boolean(submittingId)} onClick={() => void move(null)}><UiIcon name="remove" /><span><strong>移出项目</strong><small>回到最近会话</small></span>{submittingId === "unassigned" && <i>处理中…</i>}</button>}
+            {visibleProjects.map((project) => <button type="button" key={project.id} disabled={Boolean(submittingId)} onClick={() => void move(project.id)}><UiIcon name="folder" /><span><strong>{project.name}</strong><small>{project.description || "项目会话"}</small></span>{submittingId === project.id && <i>处理中…</i>}</button>)}
+            {!visibleProjects.length && !conversation?.project_id && <small className="conversation-project-empty">没有可移动的项目。</small>}
+          </div>
+        </div>
+        <footer><button type="button" className="secondary-button" onClick={onClose}>取消</button></footer>
+      </section>
+    </div>
+  );
+}
+
 function ConfirmDialog({ state, onCancel, onConfirm }: { state: ConfirmState; onCancel: () => void; onConfirm: () => void }) {
   const dialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -1830,7 +2788,7 @@ function Toast({ message }: { message: string }) {
   return <div className="toast" role="status" aria-live="polite"><span className="status-dot positive" aria-hidden="true" />{message}</div>;
 }
 
-type UiIconName = "settings" | "language" | "logout" | "chevron" | "search" | "profile" | "appearance" | "memory" | "system" | "light" | "dark" | "edit" | "shield" | "pin" | "archive" | "remove" | "folder" | "organization" | "file";
+type UiIconName = "settings" | "language" | "logout" | "chevron" | "search" | "profile" | "appearance" | "memory" | "system" | "light" | "dark" | "edit" | "shield" | "pin" | "archive" | "remove" | "folder" | "organization";
 
 function UiIcon({ name }: { name: UiIconName }) {
   const paths: Record<UiIconName, ReactNode> = {
@@ -1852,7 +2810,6 @@ function UiIcon({ name }: { name: UiIconName }) {
     remove: <><path d="M5 5l14 14M19 5 5 19" /></>,
     folder: <><path d="M3.5 7.5h6l2-2h8a1.5 1.5 0 0 1 1.5 1.5v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a1.5 1.5 0 0 1 .5-1.5Z" /><path d="M3.5 9h17.5" /></>,
     organization: <><path d="M5 20V9l4-3v14M9 20h10V4l-6 3v13M3 20h18" /><path d="M12 10h2M12 14h2M16 8h1M16 12h1" /></>,
-    file: <><path d="M7 3.5h7l4 4V20H7Z" /><path d="M14 3.5V8h4M10 12h5M10 15h5" /></>,
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }

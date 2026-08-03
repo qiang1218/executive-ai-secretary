@@ -1,0 +1,81 @@
+﻿============================================================
+Step 1: SQL (create enterprise + organization units)
+============================================================
+  SQL: CREATE EXTENSION IF NOT EXISTS pgcrypto; ...
+  SQL done.
+
+============================================================
+Step 2: CLI (create 5 users)
+============================================================
+
+  CLI: create-admin ['--email', 'admin@acme.com', '--display-name', '"ʾ������Ա"', '--enterprise-name', '"ʾ������"', '--enterprise-slug', 'acme', '--password-stdin', '--force-password-change']
+  STDERR: Traceback (most recent call last):
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "D:\python_env\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.UndefinedColumn: column "preferences_json" of relation "users" does not exist
+LINE 1: ...ord_change_required, locked_until, last_login_at, preference...
+                                                             ^
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\anchnet\executive-ai-secretary\backend\src\api\cli.py", line 275, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "D:\anchnet\executive-ai-secretary\backend\src\api\cli.py", line 257, in main
+    _create_admin(args)
+  File "D:\anchnet\executive-ai-secretary\backend\src\api\cli.py", line 150, in _create_admin
+    db.flush()
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\session.py", line 4353, in flush
+    self._flush(objects)
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\session.py", line 4488, in _flush
+    with util.safe_reraise():
+  File "D:\python_env\Lib\site-packages\sqlalchemy\util\langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\session.py", line 4449, in _flush
+    flush_context.execute()
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 465, in execute
+    rec.execute(self)
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 641, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\persistence.py", line 94, in save_obj
+    _emit_insert_statements(
+  File "D:\python_env\Lib\site-packages\sqlalchemy\orm\persistence.py", line 1234, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 1421, in execute
+    return meth(
+           ^^^^^
+  File "D:\python_env\Lib\site-packages\sqlalchemy\sql\elements.py", line 526, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 1643, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 1848, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 1988, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 2365, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\python_env\Lib\site-packages\sqlalchemy\engine\default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "D:\python_env\Lib\site-packages\psycopg\cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) column "preferences_json" of relation "users" does not exist
+LINE 1: ...ord_change_required, locked_until, last_login_at, preference...
+                                                             ^
+[SQL: INSERT INTO users (enterprise_id, email, display_name, preferred_name, role, locale, timezone, is_active, password_change_required, locked_until, last_login_at, preferences_json, id) VALUES (%(enterprise_id)s::UUID, %(email)s::VARCHAR, %(display_name)s::VARCHAR, %(preferred_name)s::VARCHAR, %(role)s::VARCHAR, %(locale)s::VARCHAR, %(timezone)s::VARCHAR, %(is_active)s, %(password_change_required)s, %(locked_until)s::TIMESTAMP WITH TIME ZONE, %(last_login_at)s::TIMESTAMP WITH TIME ZONE, %(preferences_json)s::JSONB, %(id)s::UUID) RETURNING users.created_at, users.updated_at]
+[parameters: {'enterprise_id': UUID('dd68d4cc-6ea4-4ec1-ae1e-05711219e360'), 'email': 'admin@acme.com', 'display_name': '"ʾ������Ա"', 'preferred_name': '"ʾ������Ա"', 'role': 'enterprise_admin', 'locale': 'zh-CN', 'timezone': 'Asia/Shanghai', 'is_active': True, 'password_change_required': True, 'locked_until': None, 'last_login_at': None, 'preferences_json': Jsonb({}), 'id': UUID('4656700c-5bc1-4d2b-a1d4-bf96f7323343')}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+
+  FAIL: exit code 1

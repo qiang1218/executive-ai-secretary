@@ -205,3 +205,5 @@ ehthumbs.db
 
 # Lock files we don't commit (package-lock.json IS committed for npm)
 # (none currently — placeholder for future)
+
+/new/*

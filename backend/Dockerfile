@@ -26,4 +26,6 @@ RUN mkdir -p /data/files && chown -R app:app /app /data
 USER app
 
 EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+# 走项目根目录 main.py 启动入口；host/port/reload/workers 全部由 configs.settings 注入，
+# 与本地 ``python main.py`` 行为完全一致，避免重复硬编码。
+CMD ["python", "main.py"]

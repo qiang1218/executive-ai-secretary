@@ -1,1 +1,0 @@
-"""Executive AI background worker."""

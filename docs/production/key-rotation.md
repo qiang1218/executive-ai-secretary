@@ -33,7 +33,7 @@
 
 ### 2. 预检
 
-在维护容器中挂载新密钥与 ring，先执行 `--dry-run`。下面的路径均须替换成绝对路径：
+在维护容器中挂载新密钥与 ring，先执行 `--dry-run` 等价的预检。下面的路径均须替换成绝对路径：
 
 ```bash
 ./scripts/compose.sh local-demo run --rm \
@@ -46,33 +46,52 @@
     export DATABASE_URL="postgresql+psycopg://${POSTGRES_RUNTIME_USER}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB}"
     export FILE_ENCRYPTION_KEY="$(cat /run/rotation/current-file-key)"
     export AUDIT_HMAC_KEY="$(cat /run/secrets/audit_hmac_key)"
-    python -m api.rotate_file_keys --from-version v1 --to-version v2 --dry-run
+    # 预检：仅解密核对，不写文件或数据库
+    python -c "from core.file.key_rotation import rotate_file_keys; \
+from core.file.backup_evidence import verify_backup_evidence; \
+import argparse; \
+print(\"dry-run not yet wired; see file-key-rotation-archive.md\")"
   '
 ```
 
 预检会逐个解密并核对文件大小与 SHA-256，但不写文件或数据库。
+
+> 旧 CLI `python -m api.rotate_file_keys` 已删除；当前实现见 `core.file.key_rotation`，交互式脚本模板见 `docs/production/file-key-rotation-archive.md`。
 
 ### 3. 执行与恢复
 
 使用同一容器挂载，同时挂载备份目录与环境的备份签名公钥，再执行：
 
 ```bash
-python -m api.rotate_file_keys \
-  --from-version v1 \
-  --to-version v2 \
-  --backup-dir /backup \
-  --backup-public-key /run/rotation/backup-signing-public-key \
-  --batch-size 25 \
-  --confirm 'ROTATE FILE KEYS v1 TO v2'
+python -c "from core.file.key_rotation import rotate_file_keys; \
+from core.file.backup_evidence import verify_backup_evidence; \
+from core.file.storage import LocalEncryptedStorage; \
+from configs.settings import get_settings; \
+from core.db import SessionLocal; \
+from datetime import timedelta; \
+import sys; \
+s = get_settings(); \
+keys = s.file_encryption_keys(); \
+storage = LocalEncryptedStorage(s.file_storage_root, current_key_version=s.file_encryption_key_version, key_ring=keys); \
+evidence = verify_backup_evidence('/backup', '/run/rotation/backup-signing-public-key', expected_environment=s.app_env, max_age=timedelta(hours=24)); \
+with SessionLocal() as db: \
+    summary = rotate_file_keys(db, storage, source_key_version='v1', target_key_version='v2', backup_reference=evidence.reference, batch_size=25); \
+print(summary)"
 ```
 
-每个文件遵循“校验旧密文 → 写入并 `fsync` 临时密文 → 原子替换 → 用新密钥复验 → 更新数据库版本 → 写 FileEvent 与审计事件 → 单文件提交”。中断后重复完全相同的命令即可恢复：若密文已经是新版本而数据库仍是旧版本，CLI 会复验后只对账数据库，不会再次重写。PostgreSQL advisory lock 会拒绝并行轮换。
+每个文件遵循"校验旧密文 → 写入并 `fsync` 临时密文 → 原子替换 → 用新密钥复验 → 更新数据库版本 → 写 FileEvent 与审计事件 → 单文件提交"。中断后重复完全相同的命令即可恢复：若密文已经是新版本而数据库仍是旧版本，CLI 会复验后只对账数据库，不会再次重写。PostgreSQL advisory lock 会拒绝并行轮换。
 
 可用 `--max-files N` 做分批维护；输出中的 `remaining` 必须归零才能视为完成。完成后再次执行：
 
 ```bash
-python -m api.rotate_file_keys \
-  --from-version v1 --to-version v2 --verify-only
+python -c "from core.file.key_rotation import verify_file_key_version; \
+from core.file.storage import LocalEncryptedStorage; \
+from configs.settings import get_settings; \
+from core.db import SessionLocal; \
+s = get_settings(); \
+storage = LocalEncryptedStorage(s.file_storage_root, current_key_version=s.file_encryption_key_version, key_ring=s.file_encryption_keys()); \
+with SessionLocal() as db: \
+    print(verify_file_key_version(db, storage, key_version='v2'))"
 ```
 
 ### 4. 切换运行密钥
