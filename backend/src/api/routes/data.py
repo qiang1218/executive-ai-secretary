@@ -12,8 +12,9 @@ from services.authz import (
     accessible_organization_unit_ids,
     get_executive_principal,
 )
+from api.deps import DailyBriefServiceDep
 from configs.settings import Settings, get_settings
-from services.daily_brief import build_daily_brief
+from services.daily_brief import DailyBriefService
 from services.data_freshness import effective_domain_status
 from db.session import get_db
 from exceptions.errors import AppError
@@ -35,7 +36,7 @@ DOMAIN_CAPABILITIES = {
 def get_daily_brief(
     principal: Annotated[Principal, Depends(get_executive_principal)],
     db: Annotated[Session, Depends(get_db)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    brief_service: DailyBriefServiceDep,
     organization_unit_ids: Annotated[list[uuid.UUID] | None, Query()] = None,
 ) -> DailyBriefOut:
     connected = set(
@@ -56,12 +57,10 @@ def get_daily_brief(
     if not requested or not requested.issubset(allowed):
         raise AppError(403, "data_scope_forbidden", "请求的事业部不在您的可查询范围内")
 
-    return build_daily_brief(
-        db,
+    return brief_service.build(
         enterprise_id=principal.enterprise_id,
         organization_unit_ids=requested,
         connected_organization_unit_ids=connected,
-        settings=settings,
     )
 
 

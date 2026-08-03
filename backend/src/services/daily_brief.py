@@ -402,3 +402,33 @@ def build_daily_brief(
         uses_enterprise_snapshot=uses_enterprise_snapshot,
         generated_at=utc_now(),
     )
+
+
+class DailyBriefService:
+    """Service for assembling the daily executive brief.
+
+    Follows the anspire service convention: receive the database session and
+    settings in the constructor, expose business methods. New code should
+    prefer ``DailyBriefService(db, settings).build(...)`` over the module-level
+    ``build_daily_brief(db, ..., settings=...)`` function; both are equivalent.
+    """
+
+    def __init__(self, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+
+    def build(
+        self,
+        *,
+        enterprise_id: uuid.UUID,
+        organization_unit_ids: set[uuid.UUID],
+        connected_organization_unit_ids: set[uuid.UUID],
+    ) -> DailyBriefOut:
+        """Build the daily brief for the given enterprise and scope."""
+        return build_daily_brief(
+            self._session,
+            enterprise_id=enterprise_id,
+            organization_unit_ids=organization_unit_ids,
+            connected_organization_unit_ids=connected_organization_unit_ids,
+            settings=self._settings,
+        )

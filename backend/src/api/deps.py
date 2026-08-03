@@ -18,6 +18,7 @@ from services.authz import (
     get_current_principal,
     get_executive_principal,
 )
+from services.daily_brief import DailyBriefService
 from configs.settings import Settings, get_settings
 from db.session import get_db
 
@@ -34,17 +35,28 @@ def get_audit_service(session: SessionDep) -> AuditService:
 
 AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
 
+
+def get_daily_brief_service(session: SessionDep, settings: SettingsDep) -> DailyBriefService:
+    """FastAPI dependency: instantiate ``DailyBriefService``."""
+    return DailyBriefService(session, settings)
+
+
+DailyBriefServiceDep = Annotated[DailyBriefService, Depends(get_daily_brief_service)]
+
 __all__ = [
     "SessionDep",
     "SettingsDep",
     "PrincipalDep",
     "ExecutivePrincipalDep",
     "AuditServiceDep",
+    "DailyBriefServiceDep",
     "AuditService",
+    "DailyBriefService",
     "Principal",
     "get_current_principal",
     "get_executive_principal",
     "get_audit_service",
+    "get_daily_brief_service",
     "get_db",
     "get_settings",
     "Settings",
