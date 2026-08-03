@@ -2,55 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import date, datetime
-from typing import Any
-
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Date,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    Numeric,
-    String,
-    Text,
-    UniqueConstraint,
-    Uuid,
-    event,
-    func,
-    text,
-)
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.types import JSON
-
-from db.session import Base
-
-JSONType = JSON().with_variant(JSONB(), "postgresql")
-
-
-def new_uuid() -> uuid.UUID:
-    return uuid.uuid4()
-
-
-class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-
-class UUIDMixin:
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_uuid)
+from .base import *  # noqa: F401,F403  Base / JSONType / new_uuid / mixins / sqlalchemy symbols
 
 
 class Memory(UUIDMixin, TimestampMixin, Base):
