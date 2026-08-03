@@ -1,0 +1,44 @@
+"""项目 schema."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+
+from services.data_source_configuration import public_data_source_configuration
+
+
+class ORMModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Page(BaseModel):
+    items: list[Any]
+    next_cursor: str | None = None
+
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    organization_unit_id: uuid.UUID | None = None
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    organization_unit_id: uuid.UUID | None = None
+
+
+class ProjectOut(ORMModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    organization_unit_id: uuid.UUID | None
+    pinned_at: datetime | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
