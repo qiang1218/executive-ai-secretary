@@ -4,7 +4,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -75,7 +75,7 @@ def create_project(
 ):
     previous = replay(db, request, principal, payload)
     if previous:
-        return ORJSONResponse(status_code=previous[0], content=previous[1])
+        return JSONResponse(status_code=previous[0], content=previous[1])
     assert_org_scope(db, principal, payload.organization_unit_id)
     item = Project(
         enterprise_id=principal.enterprise_id,

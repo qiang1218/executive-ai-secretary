@@ -821,8 +821,30 @@ export function ProductionWorkspace({
       setMessages((current) => [...current, message]);
       setDraft("");
       window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversationId)}`);
-      const refreshed = await productionServices.conversations.messages(conversationId);
-      setMessages(refreshed.items);
+      // 轻量轮询：只拉 assistant message 的单条状态，不拉全量 messages
+      const assistantMsg = message;
+      if (assistantMsg.status === "queued" || assistantMsg.status === "running") {
+        const startedAt = Date.now();
+        const pollIntervalMs = 2000;
+        const maxWaitMs = 300_000;
+        let finished = false;
+        while (!finished && (Date.now() - startedAt) < maxWaitMs) {
+          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+          try {
+            const updated = await productionServices.conversations.pollMessage(
+              conversationId,
+              assistantMsg.id,
+            );
+            // 原地更新列表中该条消息
+            setMessages((current) =>
+              current.map((m) => (m.id === updated.id ? updated : m)),
+            );
+            finished = updated.status !== "queued" && updated.status !== "running";
+          } catch {
+            // 网络抖动时忽略，继续轮询
+          }
+        }
+      }
       await refreshWorkspace();
     });
     setSending(false);

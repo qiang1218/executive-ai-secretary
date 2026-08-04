@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import ORJSONResponse
+
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from repositories.audit_integrity import initialize_audit_chains
@@ -40,8 +40,6 @@ def _build_lifespan() -> object:
         # 启动期校验：unsafe production 值会在这里 fail closed。
         settings.decoded_file_encryption_key()
         settings.integration_encryption_keys()
-        if len(settings.hermes_runtime_hmac_key.get_secret_value()) < 32:
-            raise RuntimeError("HERMES_RUNTIME_HMAC_KEY must contain at least 32 characters")
         with engine.begin() as connection:
             initialize_audit_chains(connection)
         yield
@@ -101,7 +99,6 @@ def create_app(routes: object | None = None, middlewares: object | None = None) 
             "企业经营决策工作台正式 API。所有业务接口均使用服务端 Session、CSRF 与数据范围校验。"
         ),
         version=settings.app_version,
-        default_response_class=ORJSONResponse,
         lifespan=_build_lifespan(),
         docs_url="/api/docs" if settings.app_mode != "production" else None,
         redoc_url=None,

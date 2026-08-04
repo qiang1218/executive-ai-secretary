@@ -159,6 +159,12 @@ export function createProductionServices(client: ApiClient = apiClient) {
         `/conversations/${encodeURIComponent(id)}/messages${queryString({ after_sequence: cursor })}`,
       );
     },
+    /** 轻量轮询：只拉单条消息的 status + content，不拉全列表 */
+    async pollMessage(conversationId: string, messageId: string) {
+      return client.request<ConversationMessage>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+      );
+    },
     async setProject(id: string, projectId: string | null) {
       return client.request<Conversation>(
         `/conversations/${encodeURIComponent(id)}/project`,

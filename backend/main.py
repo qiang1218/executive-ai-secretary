@@ -74,7 +74,13 @@ def main() -> None:
         else:
             # 纯 worker 模式: 占用当前进程
             print("[main] starting worker (foreground, no API)")
-            run_worker()
+            import traceback
+
+            try:
+                run_worker()
+            except Exception:
+                traceback.print_exc()
+                raise
         return
 
     # ── 默认 API 模式 ─────────────────────────────────────────────

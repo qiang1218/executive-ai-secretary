@@ -619,37 +619,128 @@ def process(job_id: str, lease_token: str) -> bool:
 
 
 def run_worker() -> None:
-    """Main worker loop. Blocks until SIGTERM/SIGINT."""
+    """Main worker loop. Blocks until SIGTERM/SIGINT.
+
+    使用 PostgreSQL LISTEN/NOTIFY 事件驱动：job 入队时 API 发 NOTIFY，
+    worker 收到通知才 claim，无 job 时阻塞等待，不轮询数据库。
+
+    实现：用 psycopg 在独立线程中 LISTEN，收到通知后通过 threading.Event
+    唤醒主线程 claim。这样主线程保持同步代码，避免 asyncio 引入。
+
+    claim_one 拿到 job 后丢进 ThreadPoolExecutor 异步执行，主线程立即
+    下一轮 claim。并发度由 ``settings.worker_concurrency`` 控制。
+    """
     if settings.service_role == "assistant_worker":
         settings.integration_encryption_keys()
-        if len(settings.hermes_runtime_hmac_key.get_secret_value()) < 32:
-            raise RuntimeError(
-                "HERMES_RUNTIME_HMAC_KEY must contain at least 32 characters"
-            )
-    # signal 只能在主线程注册; 后台线程模式 (run_worker_in_thread) 会跳过
     import threading as _threading
     if _threading.current_thread() is _threading.main_thread():
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
     logger.info(
-        "worker_started", extra={"structured": {"worker_id": worker_id}}
+        "worker_started",
+        extra={
+            "structured": {
+                "worker_id": worker_id,
+                "concurrency": settings.worker_concurrency,
+            }
+        },
     )
-    while not stopping:
-        claimed = claim_one()
-        if claimed is not None:
-            try:
-                process(claimed.job_id, claimed.lease_token)
-            except Exception:
-                # A database or process-level failure is recovered when the lease expires.
+
+    from concurrent.futures import Future, ThreadPoolExecutor
+
+    pool = ThreadPoolExecutor(
+        max_workers=settings.worker_concurrency,
+        thread_name_prefix="job-exec",
+    )
+    in_flight: set[Future] = set()
+
+    def _drain_done() -> None:
+        """清理已完成的 future，记录未捕获异常。"""
+        done = {f for f in in_flight if f.done()}
+        in_flight.difference_update(done)
+        for f in done:
+            exc = f.exception()
+            if exc is not None:
                 logger.exception(
-                    "job_processing_failed",
-                    extra={"structured": {"job_id": claimed.job_id}},
+                    "job_future_crashed",
+                    extra={"structured": {"error": repr(exc)}},
                 )
-        else:
-            time.sleep(settings.worker_poll_seconds)
-    logger.info(
-        "worker_stopped", extra={"structured": {"worker_id": worker_id}}
-    )
+
+    # psycopg 同步连接在独立线程中 LISTEN，用 Event 唤醒主线程
+    notify_event = _threading.Event()
+    listen_error: list[str] = []
+
+    def _listen_thread() -> None:
+        """独立线程：用 psycopg 同步连接 LISTEN new_job，收到通知时 set Event。"""
+        import psycopg
+
+        try:
+            # psycopg 3 不支持 SQLAlchemy 的 +psycopg 方言前缀，需去掉
+            dsn = settings.database_url.replace("postgresql+psycopg://", "postgresql://")
+            conn = psycopg.connect(dsn, autocommit=True)
+            conn.execute("LISTEN new_job")
+            logger.info(
+                "worker_listening", extra={"structured": {"channel": "new_job"}}
+            )
+            while not stopping:
+                # 阻塞等待通知，最多 60s 超时（兜底）
+                gen = conn.notifies(timeout=60.0)
+                for _notification in gen:
+                    notify_event.set()
+        except Exception as exc:
+            listen_error.append(str(exc))
+            logger.exception("listen_thread_failed")
+        finally:
+            notify_event.set()  # 出错时唤醒主线程，让它检测 stopping
+
+    listen_t = _threading.Thread(target=_listen_thread, daemon=True)
+    listen_t.start()
+
+    try:
+        idle_rounds = 0
+        while not stopping:
+            # 等待通知（收到 NOTIFY 或 60s 超时兜底，或 listen 线程异常）
+            notify_event.wait(timeout=settings.worker_poll_seconds)
+            notify_event.clear()
+            if listen_error:
+                logger.error(
+                    "listen_thread_error",
+                    extra={"structured": {"error": listen_error[0]}},
+                )
+                # 回退到轮询模式
+                time.sleep(settings.worker_poll_seconds)
+                _drain_done()
+                if len(in_flight) >= settings.worker_concurrency:
+                    continue
+                claimed = claim_one()
+                if claimed is not None:
+                    future = pool.submit(process, claimed.job_id, claimed.lease_token)
+                    in_flight.add(future)
+                continue
+
+            _drain_done()
+            if len(in_flight) >= settings.worker_concurrency:
+                continue
+            claimed = claim_one()
+            if claimed is not None:
+                idle_rounds = 0
+                future = pool.submit(process, claimed.job_id, claimed.lease_token)
+                in_flight.add(future)
+            else:
+                # 无 job 时指数退避（处理 NOTIFY 后 job 已被其他 worker claim 的情况）
+                idle_rounds += 1
+                sleep_sec = min(2 ** idle_rounds, 60)
+                time.sleep(sleep_sec)
+    finally:
+        logger.info(
+            "worker_draining",
+            extra={"structured": {"in_flight": len(in_flight)}},
+        )
+        pool.shutdown(wait=True, cancel_futures=False)
+        _drain_done()
+        logger.info(
+            "worker_stopped", extra={"structured": {"worker_id": worker_id}}
+        )
 
 
 def run_worker_in_thread() -> threading.Thread:

@@ -19,7 +19,7 @@ from models import (
     ScheduleRun,
 )
 from core.security import as_utc, utc_now
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -164,6 +164,8 @@ def enqueue_due_tasks(limit: int = 100) -> int:
                 task.timezone,
                 scheduled_for,
             )
+        if enqueued > 0:
+            db.execute(text("NOTIFY new_job"))
     return enqueued
 
 

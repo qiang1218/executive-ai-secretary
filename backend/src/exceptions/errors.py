@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse
 
 
 class AppError(Exception):
@@ -35,14 +35,14 @@ def error_payload(request: Request, code: str, message: str, details: Any | None
     return payload
 
 
-async def app_error_handler(request: Request, exc: AppError) -> ORJSONResponse:
-    return ORJSONResponse(
+async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+    return JSONResponse(
         status_code=exc.status_code,
         content=error_payload(request, exc.code, exc.message, exc.details),
     )
 
 
-async def http_error_handler(request: Request, exc: HTTPException) -> ORJSONResponse:
+async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse:
     if isinstance(exc.detail, dict):
         code = str(exc.detail.get("code", "http_error"))
         message = str(exc.detail.get("message", "请求无法完成"))
@@ -51,14 +51,14 @@ async def http_error_handler(request: Request, exc: HTTPException) -> ORJSONResp
         code = "http_error"
         message = str(exc.detail)
         details = None
-    return ORJSONResponse(
+    return JSONResponse(
         status_code=exc.status_code,
         content=error_payload(request, code, message, details),
         headers=exc.headers,
     )
 
 
-async def validation_error_handler(request: Request, exc: RequestValidationError) -> ORJSONResponse:
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     safe_errors = []
     for item in exc.errors():
         safe_errors.append(
@@ -68,7 +68,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
                 "type": item.get("type", "validation_error"),
             }
         )
-    return ORJSONResponse(
+    return JSONResponse(
         status_code=422,
         content=error_payload(request, "validation_error", "请求参数不符合要求", safe_errors),
     )

@@ -59,9 +59,7 @@ class Settings(BaseSettings):
     capability_hmac_key: SecretStr = SecretStr("development-only-capability-key-change-me")
     capability_token_ttl_seconds: int = Field(default=90, ge=15, le=600)
     mcp_hub_url: str = "http://mcp-hub:8010"
-    hermes_runtime_url: str = "http://hermes-runtime:8020"
     hermes_timeout_seconds: float = Field(default=120, ge=5, le=600)
-    hermes_runtime_hmac_key: SecretStr = SecretStr("development-only-hermes-runtime-key-change-me")
     integration_encryption_key: SecretStr = SecretStr("")
     integration_encryption_key_version: str = "v1"
     integration_encryption_key_ring: SecretStr = SecretStr("")
@@ -137,6 +135,10 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str | None = None
     bootstrap_admin_password: SecretStr | None = None
     log_level: str = "INFO"
+    api_host: str = "0.0.0.0"
+    api_port: int = Field(default=8000, ge=1, le=65535)
+    api_reload: bool = False
+    api_workers: int = Field(default=1, ge=1, le=16)
     worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
     worker_lease_seconds: int = Field(default=60, ge=5, le=3600)
     worker_heartbeat_seconds: int = Field(default=15, ge=1, le=1800)
@@ -144,6 +146,10 @@ class Settings(BaseSettings):
     worker_retry_base_seconds: float = Field(default=2.0, ge=0.1, le=3600)
     worker_retry_max_seconds: float = Field(default=60.0, ge=0.1, le=86_400)
     worker_job_types: Annotated[list[str], NoDecode] = ["*"]
+    # 进程内并发执行的 job 数。claim_one 拿到 job 后丢进线程池异步执行，
+    # 主循环立即下一轮 claim。建议与 hermes_max_concurrent_runs 对齐，
+    # 否则 worker claim 了 job 会被 runtime 侧 Semaphore 挡住。
+    worker_concurrency: int = Field(default=2, ge=1, le=32)
 
     @field_validator("allowed_origins", "trusted_hosts", "worker_job_types", mode="before")
     @classmethod

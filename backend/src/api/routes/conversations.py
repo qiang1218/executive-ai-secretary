@@ -7,8 +7,8 @@ from datetime import timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
-from fastapi.responses import ORJSONResponse, StreamingResponse
-from sqlalchemy import delete, exists, func, select
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import delete, exists, func, select, text
 from sqlalchemy.orm import Session
 
 from repositories.audit import record_audit
@@ -170,7 +170,7 @@ def create_conversation(
 ):
     previous = replay(db, request, principal, payload)
     if previous:
-        return ORJSONResponse(status_code=previous[0], content=previous[1])
+        return JSONResponse(status_code=previous[0], content=previous[1])
     project = None
     if payload.project_id:
         project = db.scalar(
@@ -433,6 +433,29 @@ def list_messages(
         items=[MessageOut.model_validate(item) for item in rows[:limit]],
         next_cursor=next_cursor,
     )
+
+
+@router.get(
+    "/{conversation_id}/messages/{message_id}",
+    response_model=MessageOut,
+    summary="获取单条消息（轻量 polling）",
+)
+def get_message(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_executive_principal)],
+    db: Annotated[Session, Depends(get_db)],
+) -> MessageOut:
+    owned_conversation(db, principal, conversation_id)
+    item = db.scalar(
+        select(Message).where(
+            Message.id == message_id,
+            Message.conversation_id == conversation_id,
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="message_not_found")
+    return MessageOut.model_validate(item)
 
 
 @router.get("/{conversation_id}/stream")
@@ -709,6 +732,8 @@ def resolve_clarification(
         target_type="clarification",
         target_id=clarification.id,
     )
+    # NOTIFY worker 有新 job（与 commit 在同一事务内）
+    db.execute(text("NOTIFY new_job"))
     db.commit()
     return ClarificationOut.model_validate(clarification)
 
@@ -754,7 +779,7 @@ def create_message(
 ):
     previous = replay(db, request, principal, payload)
     if previous:
-        return ORJSONResponse(status_code=previous[0], content=previous[1])
+        return JSONResponse(status_code=previous[0], content=previous[1])
     conversation = owned_conversation(db, principal, conversation_id, lock=True)
     if conversation.archived_at:
         raise AppError(409, "conversation_archived", "已归档会话不能继续发送消息")
@@ -862,6 +887,8 @@ def create_message(
         },
     )
     save_response(db, request, principal, payload, 202, output)
+    # NOTIFY worker 有新 job（与 commit 在同一事务内）
+    db.execute(text("NOTIFY new_job"))
     db.commit()
     return output
 

@@ -27,12 +27,12 @@ ON CONFLICT (enterprise_id, code) DO NOTHING;
 
 COMMIT;
 
-\! echo 'AdminP@ss123!' | python -m api.cli create-admin --email admin@acme.com --display-name "示例管理员" --enterprise-name "示例集团" --enterprise-slug acme --password-stdin --force-password-change
+\! echo 'AdminP@ss123!' | python -m utils.cli create-admin --email admin@acme.com --display-name "示例管理员" --enterprise-name "示例集团" --enterprise-slug acme --password-stdin --force-password-change
 
-\! echo 'CeoP@ss123!' | python -m api.cli create-user --enterprise-slug acme --email ceo@acme.com --display-name "示例高管" --role executive --enterprise-wide-scope --password-stdin --force-password-change
+\! echo 'CeoP@ss123!!!' | python -m utils.cli create-user --enterprise-slug acme --email ceo@acme.com --display-name "示例高管" --role executive --enterprise-wide-scope --password-stdin --force-password-change
 
-\! echo 'EastBossP@ss123!' | python -m api.cli create-user --enterprise-slug acme --email east-boss@acme.com --display-name "华东负责人" --role executive --organization-unit-code east-china --password-stdin --force-password-change
+\! echo 'EastBossP@ss123!' | python -m utils.cli create-user --enterprise-slug acme --email east-boss@acme.com --display-name "华东负责人" --role executive --organization-unit-code east-china --password-stdin --force-password-change
 
-\! echo 'Admin2P@ss123!' | python -m api.cli create-user --enterprise-slug acme --email admin2@acme.com --display-name "示例副管理员" --role enterprise_admin --enterprise-wide-scope --password-stdin --force-password-change
+\! echo 'Admin2P@ss123!!' | python -m utils.cli create-user --enterprise-slug acme --email admin2@acme.com --display-name "示例副管理员" --role enterprise_admin --enterprise-wide-scope --password-stdin --force-password-change
 
-\! echo 'FdeP@ss123!' | python -m api.cli create-user --enterprise-slug acme --email fde@acme.com --display-name "示例 FDE" --role fde --organization-unit-code east-china --password-stdin --force-password-change
+\! echo 'FdeP@ss123!!!' | python -m utils.cli create-user --enterprise-slug acme --email fde@acme.com --display-name "示例 FDE" --role fde --organization-unit-code east-china --password-stdin --force-password-change
