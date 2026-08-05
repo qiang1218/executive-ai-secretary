@@ -3,7 +3,6 @@
 import {
   FormEvent,
   KeyboardEvent,
-  ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -20,7 +19,6 @@ import type {
   ConversationMessage,
   DataCapabilities,
   DailyBrief,
-  ExecutivePersonalProfile,
   Job,
   Memory,
   OrganizationUnit,
@@ -29,457 +27,67 @@ import type {
   Project,
   Report,
 } from "./types";
-
-type ThemePreference = "system" | "light" | "dark";
-type UiLanguage = "zh-CN" | "zh-TW" | "en";
-type WorkspacePanel = "daily" | "weekly" | "history" | "memory" | "scope";
-type PreferencesView = "profile" | "appearance" | "memory";
-type ProjectDialogState = { mode: "create" } | { mode: "edit"; projectId: string };
-type ConversationProjectDialogState = { conversationId: string };
-type SidebarMenuState =
-  | { kind: "conversation"; conversationId: string; top: number }
-  | { kind: "project"; projectId: string; top: number };
-type ConfirmState = {
-  title: string;
-  description: string;
-  confirmLabel: string;
-  tone?: "normal" | "danger";
-  action: () => void | Promise<void>;
-};
-type ProfilePreferences = {
-  salutation: string;
-  amountUnit: ExecutivePersonalProfile["amount_unit"];
-  responseStyle: ExecutivePersonalProfile["response_style"];
-};
-type DailyBriefLoadState = {
-  scopeKey: string;
-  status: "ready" | "loading" | "error";
-  data: DailyBrief | null;
-};
-
-const ALL_SCOPE_ID = "all";
-const ALL_ORGANIZATIONS_SCOPE: OrganizationScope = {
-  mode: "all_authorized",
-  organization_unit_ids: [],
-};
-const COMPOSER_MAX_LENGTH = 8000;
-const COMPOSER_HINT_THRESHOLD = COMPOSER_MAX_LENGTH * 0.8;
-
-const languageOptions: Array<{ id: UiLanguage; label: string }> = [
-  { id: "zh-CN", label: "简体中文" },
-  { id: "zh-TW", label: "繁體中文" },
-  { id: "en", label: "English" },
-];
-
-const copy = {
-  "zh-CN": {
-    brand: "董事长 AI 秘书",
-    newConversation: "新建会话",
-    daily: "今日经营简报",
-    weekly: "每周高层简报",
-    history: "历史会话",
-    memory: "长期记忆",
-    pinned: "置顶",
-    projects: "项目",
-    recent: "最近",
-    all: "全部",
-    settings: "设置",
-    language: "语言",
-    logout: "退出登录",
-    profile: "个人资料",
-    appearance: "外观",
-    scope: "全部事业部",
-    placeholder: "向 AI 秘书提问经营数据，或讨论需要分析的问题",
-    disclaimer: "AI 可能出错。关键经营数字请结合来源与数据时间核对。",
-    noProject: "尚未创建项目",
-    noConversation: "尚无历史会话",
-    dataReady: "企业数据可用",
-    dataMissing: "尚未配置数据范围",
-  },
-  "zh-TW": {
-    brand: "董事長 AI 秘書",
-    newConversation: "新建會話",
-    daily: "今日經營簡報",
-    weekly: "每週高層簡報",
-    history: "歷史會話",
-    memory: "長期記憶",
-    pinned: "置頂",
-    projects: "項目",
-    recent: "最近",
-    all: "全部",
-    settings: "設定",
-    language: "語言",
-    logout: "登出",
-    profile: "個人資料",
-    appearance: "外觀",
-    scope: "全部事業部",
-    placeholder: "向 AI 秘書提問經營資料，或討論需要分析的問題",
-    disclaimer: "AI 可能出錯。關鍵經營數字請結合來源與資料時間核對。",
-    noProject: "尚未建立項目",
-    noConversation: "尚無歷史會話",
-    dataReady: "企業資料可用",
-    dataMissing: "尚未設定資料範圍",
-  },
-  en: {
-    brand: "Chairman's AI Secretary",
-    newConversation: "New conversation",
-    daily: "Daily brief",
-    weekly: "Weekly executive brief",
-    history: "Conversation history",
-    memory: "Long-term memory",
-    pinned: "Pinned",
-    projects: "Projects",
-    recent: "Recent",
-    all: "All",
-    settings: "Settings",
-    language: "Language",
-    logout: "Sign out",
-    profile: "Profile",
-    appearance: "Appearance",
-    scope: "All business units",
-    placeholder: "Ask about the business or discuss a question that needs analysis",
-    disclaimer: "AI can make mistakes. Verify critical figures against sources and data timestamps.",
-    noProject: "No projects yet",
-    noConversation: "No conversations yet",
-    dataReady: "Enterprise data available",
-    dataMissing: "No data scope configured",
-  },
-} as const;
-
-function preferredDisplayName(me: AuthMe) {
-  return me.user.preferred_name || me.user.display_name || me.user.email;
-}
-
-function environmentLabel(me: AuthMe) {
-  return me.app_env === "local-demo" || me.app_mode === "demo"
-    ? "脱敏演示环境"
-    : "生产环境";
-}
-
-function localizedDate(locale: string, timezone: string) {
-  try {
-    const resolvedLocale = locale || "zh-CN";
-    const formatter = new Intl.DateTimeFormat(resolvedLocale, {
-      year: "numeric",
-      month: "numeric",
-      day: "numeric",
-      weekday: "long",
-      timeZone: timezone || "Asia/Shanghai",
-    });
-    if (!resolvedLocale.startsWith("zh")) return formatter.format(new Date());
-    const values = Object.fromEntries(formatter.formatToParts(new Date()).map((part) => [part.type, part.value]));
-    return `${values.year}年${values.month}月${values.day}日，${values.weekday}`;
-  } catch {
-    return new Intl.DateTimeFormat("zh-CN", { dateStyle: "full" }).format(new Date());
-  }
-}
-
-type GreetingContext = "time" | "return" | "idle";
-type GreetingState = { context: GreetingContext; seed: string; observedAt: number };
-type PresenceRecord = { dateKey: string; lastSeenAt: number; returnCount: number };
-
-function zonedClock(timezone: string, now: Date = new Date()) {
-  let hour = now.getHours();
-  let dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "numeric",
-      hour12: false,
-      timeZone: timezone || "Asia/Shanghai",
-    }).formatToParts(now);
-    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    if (values.hour) hour = Number(values.hour) % 24;
-    if (values.year && values.month && values.day) dateKey = `${values.year}-${values.month}-${values.day}`;
-  } catch {
-    // Browser time is a safe display-only fallback.
-  }
-  return { hour, dateKey };
-}
-
-function stableGreetingIndex(seed: string, size: number) {
-  let hash = 0;
-  for (const character of seed) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
-  return Math.abs(hash) % Math.max(size, 1);
-}
-
-function timeGreeting(hour: number, language: UiLanguage, salutation: string) {
-  if (language === "en") {
-    if (hour < 5 || hour >= 23) return `It is late, take care, ${salutation}`;
-    if (hour < 12) return `Good morning, ${salutation}`;
-    if (hour < 18) return `Good afternoon, ${salutation}`;
-    return `Good evening, ${salutation}`;
-  }
-  if (hour < 5 || hour >= 23) return language === "zh-TW" ? `夜深了，${salutation}` : `夜深了，${salutation}`;
-  if (hour < 10) return language === "zh-TW" ? `早上好，${salutation}` : `早上好，${salutation}`;
-  if (hour < 13) return language === "zh-TW" ? `中午好，${salutation}` : `中午好，${salutation}`;
-  if (hour < 18) return language === "zh-TW" ? `下午好，${salutation}` : `下午好，${salutation}`;
-  return language === "zh-TW" ? `晚上好，${salutation}` : `晚上好，${salutation}`;
-}
-
-function contextualGreeting(state: GreetingState, timezone: string, language: UiLanguage, salutation: string) {
-  const { hour } = zonedClock(timezone, new Date(state.observedAt));
-  if (state.context === "time") return timeGreeting(hour, language, salutation);
-  if (language === "en") {
-    if (hour < 5 || hour >= 23) return `It is late, remember to rest, ${salutation}`;
-    const values = state.context === "idle"
-      ? [`You have worked hard, ${salutation}.`, `Take a moment to breathe, ${salutation}.`]
-      : [`Welcome back, ${salutation}.`, `Good to see you again, ${salutation}.`, `I missed you, ${salutation}.`];
-    return values[stableGreetingIndex(state.seed, values.length)];
-  }
-  const traditional = language === "zh-TW";
-  if (hour < 5 || hour >= 23) return traditional ? `夜深了，注意休息，${salutation}` : `夜深了，注意休息，${salutation}`;
-  const values = state.context === "idle"
-      ? traditional
-      ? [`工作辛苦了，${salutation}。`, `放鬆一下吧，${salutation}。`]
-      : [`工作辛苦了，${salutation}。`, `放松一下吧，${salutation}。`]
-    : traditional
-      ? [`歡迎回來，${salutation}！`, `${salutation} 回來了！`, `${salutation}，我很想你！`]
-      : [`欢迎回来，${salutation}！`, `${salutation} 回来了！`, `${salutation}，我很想你！`];
-  return values[stableGreetingIndex(state.seed, values.length)];
-}
-
-function readPresenceRecord(key: string): PresenceRecord | null {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(key) || "null") as Partial<PresenceRecord> | null;
-    if (!value || typeof value.dateKey !== "string" || typeof value.lastSeenAt !== "number" || typeof value.returnCount !== "number") return null;
-    return { dateKey: value.dateKey, lastSeenAt: value.lastSeenAt, returnCount: value.returnCount };
-  } catch {
-    return null;
-  }
-}
-
-function useHumanGreeting(me: AuthMe, language: UiLanguage, salutation: string) {
-  const timezone = me.user.timezone || "Asia/Shanghai";
-  const [state, setState] = useState<GreetingState>(() => {
-    const now = Date.now();
-    if (typeof window === "undefined") return { context: "time", seed: "initial", observedAt: now };
-    const { dateKey } = zonedClock(timezone, new Date(now));
-    const previous = readPresenceRecord(`executive-workbench-presence:${me.user.id}`);
-    const returningToday = previous?.dateKey === dateKey;
-    const returnCount = returningToday ? previous.returnCount + 1 : 0;
-    return {
-      context: returningToday ? "return" : "time",
-      seed: `${me.user.id}:${dateKey}:${returnCount}`,
-      observedAt: now,
-    };
-  });
-  const stateRef = useRef(state);
-  const lastActivityAt = useRef<number | null>(null);
-  const hiddenAt = useRef<number | null>(null);
-
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
-
-  useEffect(() => {
-    const userKey = me.user.id;
-    const presenceKey = `executive-workbench-presence:${userKey}`;
-    const now = Date.now();
-    const { dateKey } = zonedClock(timezone, new Date(now));
-    const previous = readPresenceRecord(presenceKey);
-    let returnCount = previous?.dateKey === dateKey ? previous.returnCount : 0;
-    if (previous?.dateKey === dateKey) returnCount += 1;
-    lastActivityAt.current = now;
-    window.localStorage.setItem(presenceKey, JSON.stringify({ dateKey, lastSeenAt: now, returnCount } satisfies PresenceRecord));
-
-    const rememberPresence = () => {
-      const timestamp = Date.now();
-      const currentDateKey = zonedClock(timezone, new Date(timestamp)).dateKey;
-      const current = readPresenceRecord(presenceKey);
-      window.localStorage.setItem(presenceKey, JSON.stringify({
-        dateKey: currentDateKey,
-        lastSeenAt: timestamp,
-        returnCount: current?.dateKey === currentDateKey ? current.returnCount : 0,
-      } satisfies PresenceRecord));
-    };
-    const showContext = (context: GreetingContext, timestamp: number) => {
-      const nextDateKey = zonedClock(timezone, new Date(timestamp)).dateKey;
-      const nextState: GreetingState = { context, seed: `${userKey}:${nextDateKey}:${context}:${Math.floor(timestamp / 300_000)}`, observedAt: timestamp };
-      stateRef.current = nextState;
-      setState(nextState);
-    };
-    const onVisibilityChange = () => {
-      const timestamp = Date.now();
-      if (document.visibilityState === "hidden") {
-        hiddenAt.current = timestamp;
-        rememberPresence();
-        return;
-      }
-      const elapsed = hiddenAt.current ? timestamp - hiddenAt.current : 0;
-      hiddenAt.current = null;
-      if (elapsed >= 45 * 60_000) showContext("idle", timestamp);
-      else if (elapsed >= 5 * 60_000) showContext("return", timestamp);
-      lastActivityAt.current = timestamp;
-    };
-    const onActivity = () => {
-      const timestamp = Date.now();
-      if (lastActivityAt.current !== null && timestamp - lastActivityAt.current >= 45 * 60_000) showContext("idle", timestamp);
-      lastActivityAt.current = timestamp;
-    };
-    const timer = window.setInterval(() => {
-      const timestamp = Date.now();
-      const currentDateKey = zonedClock(timezone, new Date(timestamp)).dateKey;
-      if (currentDateKey !== zonedClock(timezone, new Date(stateRef.current.observedAt)).dateKey) showContext("time", timestamp);
-      else if (document.visibilityState === "visible" && lastActivityAt.current !== null && timestamp - lastActivityAt.current >= 45 * 60_000 && stateRef.current.context !== "idle") showContext("idle", timestamp);
-      else setState((current) => ({ ...current, observedAt: timestamp }));
-    }, 60_000);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("pointerdown", onActivity);
-    window.addEventListener("keydown", onActivity);
-    window.addEventListener("pagehide", rememberPresence);
-    return () => {
-      rememberPresence();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("pointerdown", onActivity);
-      window.removeEventListener("keydown", onActivity);
-      window.removeEventListener("pagehide", rememberPresence);
-    };
-  }, [me.user.id, timezone]);
-
-  return contextualGreeting(state, timezone, language, salutation);
-}
-
-function formatTimestamp(value: string | null | undefined, locale: string = "zh-CN") {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function formatDate(value: string, locale: string = "zh-CN") {
-  const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }).format(date);
-}
-
-function dailyBriefDataAsOf(brief: DailyBrief | null) {
-  return brief?.data_as_of ?? null;
-}
-
-function dailyBriefHeadline(brief: DailyBrief, language: UiLanguage) {
-  const uncertain = brief.readiness === "partial" || brief.readiness === "unavailable";
-  if (language === "en") {
-    if (uncertain && brief.attention_count === 0) return "There is not enough current data to make a determination";
-    if (uncertain) return `${brief.attention_count} item${brief.attention_count === 1 ? "" : "s"} identified for confirmation so far`;
-    return brief.attention_count > 0
-      ? `${brief.attention_count} item${brief.attention_count === 1 ? "" : "s"} need your attention today`
-      : "Nothing needs your confirmation today";
-  }
-  if (language === "zh-TW") {
-    if (uncertain && brief.attention_count === 0) return "目前數據不足，暫不能判斷";
-    if (uncertain) return `目前已識別 ${brief.attention_count} 項需要確認`;
-    return brief.attention_count > 0
-      ? `今日有 ${brief.attention_count} 項需要確認`
-      : "今日暫無需要確認的事項";
-  }
-  if (uncertain && brief.attention_count === 0) return "当前数据不足，暂不能判断";
-  if (uncertain) return `当前已识别 ${brief.attention_count} 项需要确认`;
-  return brief.attention_count > 0
-    ? `今日有 ${brief.attention_count} 项需要确认`
-    : "今日暂无需要确认的事项";
-}
-
-const domainLabels: Record<string, string> = {
-  opportunity: "商机",
-  delivery: "交付",
-  collection: "回款",
-  target: "目标",
-};
-
-function professionalSourceLabel(value: string | null | undefined) {
-  if (!value) return "经营数据源";
-  return value
-    .replaceAll("飞书经营三表", "飞书经营数据源")
-    .replaceAll("飞书三表", "飞书经营数据源")
-    .replaceAll("三表批次", "经营数据批次");
-}
-
-function dataStatusLabel(capabilities: DataCapabilities | null) {
-  if (!capabilities) return "数据状态待确认";
-  if (capabilities.overall_status === "fresh") return "经营数据已就绪";
-  if (capabilities.overall_status === "stale") return "部分数据时间较早";
-  if (capabilities.overall_status === "partial") return "部分数据可用";
-  if (capabilities.overall_status === "failed") return "数据同步失败";
-  return "尚未完成数据同步";
-}
-
-function messageStatusLabel(status: ConversationMessage["status"]) {
-  if (status === "queued") return "等待受控处理";
-  if (status === "running") return "正在处理";
-  if (status === "failed") return "未完成";
-  return status ?? "";
-}
-
-function makeInitials(value: string) {
-  const normalized = value.trim();
-  if (!normalized) return "董";
-  const latin = normalized.split(/[\s._-]+/).filter(Boolean).map((part) => part[0]).join("").slice(0, 2);
-  return latin || normalized.slice(0, 2);
-}
-
-function sortByPinnedAndRecent<T extends { pinned_at: string | null; updated_at: string }>(items: T[]) {
-  return [...items].sort((first, second) => {
-    if (Boolean(first.pinned_at) !== Boolean(second.pinned_at)) return first.pinned_at ? -1 : 1;
-    return second.updated_at.localeCompare(first.updated_at);
-  });
-}
-
-function scopeLabel(scope: OrganizationScope, units: OrganizationUnit[], language: UiLanguage) {
-  const c = copy[language];
-  if (scope.mode === "all_authorized") return c.scope;
-  const names = scope.organization_unit_ids
-    .map((id) => units.find((unit) => unit.id === id)?.name)
-    .filter((name): name is string => Boolean(name));
-  if (names.length === 1) return names[0];
-  if (names.length === 2) return names.join("、");
-  return language === "en" ? `${names.length} business units selected` : `已选 ${names.length} 个事业部`;
-}
-
-function scopeFromConversation(conversation: Conversation): OrganizationScope {
-  const existing = conversation.organization_scope;
-  if (existing) {
-    return {
-      mode: existing.mode,
-      organization_unit_ids: [...existing.organization_unit_ids],
-    };
-  }
-  if (conversation.organization_unit_id) {
-    return {
-      mode: "selected",
-      organization_unit_ids: [conversation.organization_unit_id],
-    };
-  }
-  return {
-    mode: "all_authorized",
-    organization_unit_ids: [],
-  };
-}
-
-function organizationScopeKey(scope: OrganizationScope) {
-  return scope.mode === "all_authorized"
-    ? "all_authorized"
-    : [...scope.organization_unit_ids].sort().join(",");
-}
-
-function resolvedDailyBriefScopeKey(brief: DailyBrief | null) {
-  if (!brief) return "all_authorized";
-  return brief.uses_enterprise_snapshot
-    ? "all_authorized"
-    : [...brief.organization_unit_ids].sort().join(",");
-}
+import { UiIcon } from "./ui-icon";
+import { useHumanGreeting } from "./use-human-greeting";
+import {
+  type ConfirmState,
+  type ConversationProjectDialogState,
+  type DailyBriefLoadState,
+  type MemoryCreateHandler,
+  type MemoryUpdateHandler,
+  type PreferencesView,
+  type ProfilePreferences,
+  type ProjectDialogState,
+  type SidebarMenuState,
+  type ThemePreference,
+  type UiLanguage,
+  type WorkspacePanel,
+  ALL_ORGANIZATIONS_SCOPE,
+  ALL_SCOPE_ID,
+  COMPOSER_MAX_LENGTH,
+  COMPOSER_HINT_THRESHOLD,
+  copy,
+  languageOptions,
+} from "./workspace-types";
+import {
+  buildStructuredChart,
+  dailyBriefDataAsOf,
+  dailyBriefHeadline,
+  dataStatusLabel,
+  domainLabels,
+  environmentLabel,
+  findStructuredRows,
+  firstText,
+  formatDate,
+  formatStructuredValue,
+  formatTimestamp,
+  humanizeMetricKey,
+  localizedDate,
+  makeInitials,
+  messageStatusLabel,
+  organizationScopeKey,
+  preferredDisplayName,
+  professionalSourceLabel,
+  recordItems,
+  resolvedDailyBriefScopeKey,
+  scopeFromConversation,
+  scopeLabel,
+  sortByPinnedAndRecent,
+  visibleStructuredEntries,
+  type StructuredChartDatum,
+} from "./workspace-utils";
+import {
+  ConfirmDialog,
+  ConversationProjectDialog,
+  EmptyState,
+  ProjectDialog,
+  Toast,
+} from "./workspace-dialogs";
 
 export function ProductionWorkspace({
   initialBootstrap,
   onSessionExpired,
+  onReload,
 }: {
   initialBootstrap: ProductionBootstrap;
   onSessionExpired: () => void;
@@ -593,8 +201,6 @@ export function ProductionWorkspace({
   const userInitials = makeInitials(preferredDisplayName(me)).toUpperCase();
   // Production mode never falls back to bundled demo fixtures: every render reads
   // real backend data, and any error surfaces as a 脱敏演示环境 banner instead of demo data.
-  const productionModeNotice = "生产模式不会使用演示数据：所有数据均来自后端服务实时返回。";
-  const hasPendingAssistant = Boolean(activeConversationId && sending);
   useEffect(() => {
     if (dailyBriefState.scopeKey === dailyBriefScopeRequestKey) return;
     let cancelled = false;
@@ -670,34 +276,6 @@ export function ProductionWorkspace({
   useEffect(() => {
     window.localStorage.setItem("executive-workbench-unread-conversations", JSON.stringify(unreadConversationIds));
   }, [unreadConversationIds]);
-
-  useEffect(() => {
-    const closeFloating = (event: PointerEvent) => {
-      const target = event.target as HTMLElement;
-      if (!accountRef.current?.contains(target)) {
-        setAccountMenuOpen(false);
-        setLanguageMenuOpen(false);
-      }
-      if (!target.closest("[data-sidebar-menu]")) setSidebarMenu(null);
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        newConversation();
-      }
-      if (event.key === "Escape") {
-        setAccountMenuOpen(false);
-        setLanguageMenuOpen(false);
-        setSidebarMenu(null);
-      }
-    };
-    window.addEventListener("pointerdown", closeFloating);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", closeFloating);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  });
 
   const runRequest = useCallback(async <T,>(action: () => Promise<T>): Promise<T | undefined> => {
     try {
@@ -779,6 +357,37 @@ export function ProductionWorkspace({
     window.history.replaceState(null, "", window.location.pathname);
   }
 
+  const newConversationRef = useRef(newConversation);
+  newConversationRef.current = newConversation;
+
+  useEffect(() => {
+    const closeFloating = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (!accountRef.current?.contains(target)) {
+        setAccountMenuOpen(false);
+        setLanguageMenuOpen(false);
+      }
+      if (!target.closest("[data-sidebar-menu]")) setSidebarMenu(null);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        newConversationRef.current();
+      }
+      if (event.key === "Escape") {
+        setAccountMenuOpen(false);
+        setLanguageMenuOpen(false);
+        setSidebarMenu(null);
+      }
+    };
+    window.addEventListener("pointerdown", closeFloating);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", closeFloating);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
@@ -821,30 +430,7 @@ export function ProductionWorkspace({
       setMessages((current) => [...current, message]);
       setDraft("");
       window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversationId)}`);
-      // 轻量轮询：只拉 assistant message 的单条状态，不拉全量 messages
-      const assistantMsg = message;
-      if (assistantMsg.status === "queued" || assistantMsg.status === "running") {
-        const startedAt = Date.now();
-        const pollIntervalMs = 2000;
-        const maxWaitMs = 300_000;
-        let finished = false;
-        while (!finished && (Date.now() - startedAt) < maxWaitMs) {
-          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-          try {
-            const updated = await productionServices.conversations.pollMessage(
-              conversationId,
-              assistantMsg.id,
-            );
-            // 原地更新列表中该条消息
-            setMessages((current) =>
-              current.map((m) => (m.id === updated.id ? updated : m)),
-            );
-            finished = updated.status !== "queued" && updated.status !== "running";
-          } catch {
-            // 网络抖动时忽略，继续轮询
-          }
-        }
-      }
+      // 消息更新由 SSE 流（conversation stream）异步驱动，无需在此同步轮询阻塞输入框。
       await refreshWorkspace();
     });
     setSending(false);
@@ -1363,7 +949,7 @@ export function ProductionWorkspace({
           <button className="mobile-sidebar-trigger" type="button" aria-label="打开侧栏" onClick={() => setSidebarOpen(true)}>☰</button>
           <div className="workspace-title-block"><strong>{activeConversation?.title || (activeProjectId ? bootstrap.projects.find((item) => item.id === activeProjectId)?.name : null) || c.newConversation}</strong><small>{environmentLabel(me)} · {selectedScopeLabel}</small></div>
           <time className="workspace-topbar-date" dateTime={new Date().toISOString()}>{localizedDate(languagePreference, me.user.timezone)}</time>
-          <div className="workspace-topbar-actions"><button className="topbar-scope-button" type="button" onClick={() => setActivePanel("scope")}>数据状态</button><button className="topbar-new-button" type="button" aria-label="新建会话" onClick={() => newConversation()}>＋</button></div>
+          <div className="workspace-topbar-actions"><button className="topbar-scope-button" type="button" onClick={() => setActivePanel("scope")}>数据状态</button><button className="topbar-refresh-button" type="button" aria-label="刷新工作台" onClick={() => void onReload()}>↻</button><button className="topbar-new-button" type="button" aria-label="新建会话" onClick={() => newConversation()}>＋</button></div>
         </header>
         <main id="main-content" className="workspace-main">
           {activeConversationId ? (
@@ -1790,144 +1376,6 @@ function MessageSkeleton() {
   return <section className="message-skeleton" aria-live="polite" aria-label="正在读取会话消息"><span /><span /><span /><span /></section>;
 }
 
-function humanizeMetricKey(key: string) {
-  const labels: Record<string, string> = {
-    opportunity_count: "商机数量",
-    pipeline_amount: "商机金额",
-    weighted_pipeline_amount: "加权商机",
-    delivery_count: "交付项目",
-    delivery_attention_count: "交付关注",
-    receivable_amount: "应收金额",
-    collected_amount: "已回款",
-    outstanding_amount: "未回款",
-    overdue_amount: "逾期金额",
-    weighted_forecast: "加权预测",
-    project_count: "项目数量",
-    attention_count: "关注项目",
-    contract_amount: "合同金额",
-    gross_profit_amount: "毛利金额",
-    gross_margin_rate: "毛利率",
-    name: "名称",
-    stage: "阶段",
-    bucket: "账龄",
-    organization_name: "事业部",
-    customer_alias: "客户",
-    status: "状态",
-    risk_level: "风险等级",
-    milestone: "当前里程碑",
-    delay_days: "延期天数",
-    count: "数量",
-    probability: "赢单概率",
-    progress_rate: "完成进度",
-    target_value: "目标值",
-    actual_value: "实际值",
-    completion_rate: "完成率",
-  };
-  return labels[key] ?? key.replaceAll("_", " ");
-}
-
-function formatStructuredValue(key: string, value: unknown) {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "boolean") return value ? "是" : "否";
-  if (typeof value !== "number") {
-    if (typeof value !== "string") return "—";
-    const valueLabels: Record<string, string> = {
-      active: "推进中", stalled: "停滞", won: "已赢单", lost: "已输单", paused: "已暂停",
-      normal: "正常", attention: "需关注", delayed: "已延期", critical: "严重风险", high: "高风险",
-      completed: "已完成", pending: "待处理", in_progress: "进行中",
-    };
-    return valueLabels[value] ?? value;
-  }
-  if (key.endsWith("_rate") || key === "probability") return `${(value * (value <= 1 ? 100 : 1)).toFixed(1)}%`;
-  if (key === "delay_days") return `${value.toLocaleString("zh-CN")} 天`;
-  if (key.includes("amount") || key.includes("forecast")) {
-    return `${(value / 10000).toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 万`;
-  }
-  return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
-}
-
-const structuredRowKeys = [
-  "organizations",
-  "organization_units",
-  "metrics",
-  "stages",
-  "customers",
-  "projects",
-  "aging",
-  "snapshots",
-  "rows",
-  "items",
-];
-
-function findStructuredRows(value: unknown, depth = 0): unknown[] | null {
-  if (!value || depth > 4) return null;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const nested = findStructuredRows(item, depth + 1);
-      if (nested) return nested;
-    }
-    return null;
-  }
-  if (typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  for (const key of structuredRowKeys) {
-    const candidate = record[key];
-    if (Array.isArray(candidate) && candidate.length > 0) return candidate;
-  }
-  for (const candidate of Object.values(record)) {
-    const nested = findStructuredRows(candidate, depth + 1);
-    if (nested) return nested;
-  }
-  return null;
-}
-
-function visibleStructuredEntries(record: Record<string, unknown>) {
-  return Object.entries(record)
-    .filter(([key, value]) => (
-      !key.includes("source_record_id")
-      && !key.endsWith("_id")
-      && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
-    ))
-    .slice(0, 4);
-}
-
-type StructuredChartDatum = {
-  label: string;
-  value: number;
-};
-
-function buildStructuredChart(rows: unknown[]) {
-  const records = rows.filter(
-    (row): row is Record<string, unknown> => Boolean(row && typeof row === "object" && !Array.isArray(row)),
-  );
-  if (records.length < 2) return null;
-  const first = records[0];
-  const visibleKeys = Object.keys(first).filter(
-    (key) => !key.includes("source_record_id") && !key.endsWith("_id"),
-  );
-  const labelPriority = ["name", "stage", "bucket", "organization_name", "customer_alias", "risk_level", "status", "period"];
-  const labelKey = labelPriority.find((key) => typeof first[key] === "string")
-    ?? visibleKeys.find((key) => typeof first[key] === "string");
-  const numericKeys = visibleKeys.filter((key) => typeof first[key] === "number");
-  const metricKey = numericKeys.sort((left, right) => {
-    const score = (key: string) => key.includes("amount") || key.includes("forecast")
-      ? 4
-      : key.includes("count")
-        ? 3
-        : key.includes("rate") || key.includes("probability")
-          ? 2
-          : 1;
-    return score(right) - score(left);
-  })[0];
-  if (!labelKey || !metricKey) return null;
-  const items: StructuredChartDatum[] = records
-    .map((record) => ({ label: String(record[labelKey] ?? "—"), value: Number(record[metricKey]) }))
-    .filter((item) => Number.isFinite(item.value))
-    .slice(0, 8);
-  if (items.length < 2) return null;
-  return { metricKey, items };
-}
-
 function StructuredBarChart({
   metricKey,
   items,
@@ -2202,10 +1650,6 @@ function OrganizationPicker({
   );
 }
 
-type MemoryUpdateValues = { title?: string; content?: string; status?: "active" | "disabled" | "deleted" };
-type MemoryCreateHandler = (title: string, content: string, kind: string, organizationUnitId: string | null) => Promise<boolean>;
-type MemoryUpdateHandler = (memory: Memory, values: MemoryUpdateValues) => Promise<boolean>;
-
 function WorkspaceDetailPanel({
   panel,
   onClose,
@@ -2404,26 +1848,6 @@ function ProductionScopePanel({
       <aside className="scope-security-note"><UiIcon name="shield" /><div><strong>范围由服务端控制</strong><p>创建会话、生成任务和读取资源时都会再次校验权限，不依赖前端选择结果。</p></div></aside>
     </div>
   );
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-function firstText(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-function recordItems(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (Array.isArray(value)) return value.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item));
-  }
-  return [];
 }
 
 function ProductionDailyBriefPanel({ brief, language }: { brief: DailyBrief; language: UiLanguage }) {
@@ -2662,176 +2086,3 @@ function PreferencesWindow({
   );
 }
 
-function ProjectDialog({
-  state,
-  project,
-  organizationUnits,
-  onClose,
-  onSave,
-}: {
-  state: ProjectDialogState;
-  project: Project | null;
-  organizationUnits: OrganizationUnit[];
-  onClose: () => void;
-  onSave: (name: string, description: string, organizationUnitId: string) => Promise<boolean>;
-}) {
-  const [name, setName] = useState(project?.name ?? "");
-  const [description, setDescription] = useState(project?.description ?? "");
-  const [organizationUnitId, setOrganizationUnitId] = useState(project?.organization_unit_id ?? ALL_SCOPE_ID);
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const dialogRef = useRef<HTMLElement>(null);
-  const editing = state.mode === "edit";
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLInputElement>("input")?.focus());
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])"));
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", handleKeyDown); previouslyFocused?.focus(); };
-  }, [onClose]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!name.trim()) { setError("请输入项目名称。"); return; }
-    setSubmitting(true);
-    const saved = await onSave(name.trim(), description.trim(), organizationUnitId);
-    setSubmitting(false);
-    if (!saved) setError("项目暂时未能保存，请检查页面提示后重试。");
-  }
-
-  return (
-    <div className="project-dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={dialogRef} className="project-dialog" role="dialog" aria-modal="true" aria-labelledby="production-project-dialog-title">
-        <header><div><small>{editing ? "项目设置" : "工作项目"}</small><h2 id="production-project-dialog-title">{editing ? "编辑项目" : "创建项目"}</h2></div><button type="button" aria-label="关闭项目窗口" onClick={onClose}>×</button></header>
-        <form onSubmit={submit}>
-          <label className="project-name-field"><span>项目名称</span><span className="project-name-input"><UiIcon name="folder" /><input value={name} maxLength={200} onChange={(event) => { setName(event.target.value); setError(""); }} placeholder="例如：年度经营计划" autoComplete="off" /></span></label>
-          <label className="project-description-field"><span>项目说明 <small>可选</small></span><textarea value={description} maxLength={4000} rows={3} onChange={(event) => setDescription(event.target.value)} placeholder="说明该项目持续关注的经营主题或范围" /><small>创建后，可直接从项目中开始一条新会话。</small></label>
-          <label className="project-scope-field"><span>默认事业部范围</span><select value={organizationUnitId} onChange={(event) => setOrganizationUnitId(event.target.value)}><option value={ALL_SCOPE_ID}>全部授权事业部</option>{organizationUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select><small>可选项来自企业管理员配置，不会扩大账号权限。</small></label>
-          {error && <p className="project-dialog-error" role="alert">{error}</p>}
-          <footer><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="primary-button" disabled={!name.trim() || submitting}>{submitting ? "保存中…" : editing ? "保存修改" : "创建项目"}</button></footer>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function ConversationProjectDialog({
-  conversation,
-  projects,
-  onClose,
-  onMove,
-}: {
-  conversation: Conversation | null;
-  projects: Project[];
-  onClose: () => void;
-  onMove: (projectId: string | null) => Promise<boolean>;
-}) {
-  const [query, setQuery] = useState("");
-  const [submittingId, setSubmittingId] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLElement>(null);
-  const visibleProjects = projects.filter((project) => (
-    project.id !== conversation?.project_id
-    && project.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
-  ));
-
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    window.requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLInputElement>("input")?.focus());
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => { window.removeEventListener("keydown", onKeyDown); previouslyFocused?.focus(); };
-  }, [onClose]);
-
-  async function move(projectId: string | null) {
-    setSubmittingId(projectId ?? "unassigned");
-    const moved = await onMove(projectId);
-    if (!moved) setSubmittingId(null);
-  }
-
-  return (
-    <div className="project-dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={dialogRef} className="project-dialog conversation-project-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-project-dialog-title">
-        <header><div><small>会话归属</small><h2 id="conversation-project-dialog-title">移到项目</h2></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
-        <div className="conversation-project-dialog-body">
-          <p>“{conversation?.title || "未命名会话"}”一次只归属一个项目，历史消息、模型和证据不会改变。</p>
-          <label><span className="sr-only">搜索项目</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目" /></label>
-          <div className="conversation-project-options">
-            {conversation?.project_id && <button type="button" disabled={Boolean(submittingId)} onClick={() => void move(null)}><UiIcon name="remove" /><span><strong>移出项目</strong><small>回到最近会话</small></span>{submittingId === "unassigned" && <i>处理中…</i>}</button>}
-            {visibleProjects.map((project) => <button type="button" key={project.id} disabled={Boolean(submittingId)} onClick={() => void move(project.id)}><UiIcon name="folder" /><span><strong>{project.name}</strong><small>{project.description || "项目会话"}</small></span>{submittingId === project.id && <i>处理中…</i>}</button>)}
-            {!visibleProjects.length && !conversation?.project_id && <small className="conversation-project-empty">没有可移动的项目。</small>}
-          </div>
-        </div>
-        <footer><button type="button" className="secondary-button" onClick={onClose}>取消</button></footer>
-      </section>
-    </div>
-  );
-}
-
-function ConfirmDialog({ state, onCancel, onConfirm }: { state: ConfirmState; onCancel: () => void; onConfirm: () => void }) {
-  const dialogRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    window.requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus());
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); onCancel(); return; }
-      if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => { window.removeEventListener("keydown", handleKeyDown); previouslyFocused?.focus(); };
-  }, [onCancel]);
-  return <div className="overlay dialog-overlay" role="presentation"><section ref={dialogRef} className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="production-confirm-title"><span className={`confirm-mark ${state.tone === "danger" ? "danger" : ""}`} aria-hidden="true">!</span><h2 id="production-confirm-title">{state.title}</h2><p>{state.description}</p><div><button type="button" className="secondary-button" onClick={onCancel}>取消</button><button type="button" className={state.tone === "danger" ? "danger-button" : "primary-button"} onClick={onConfirm}>{state.confirmLabel}</button></div></section></div>;
-}
-
-function EmptyState({ title, description, action, onAction }: { title: string; description: string; action?: string; onAction?: () => void }) {
-  return <section className="empty-state"><span aria-hidden="true">∅</span><h2>{title}</h2><p>{description}</p>{action && onAction && <button type="button" className="secondary-button" onClick={onAction}>{action}</button>}</section>;
-}
-
-function Toast({ message }: { message: string }) {
-  return <div className="toast" role="status" aria-live="polite"><span className="status-dot positive" aria-hidden="true" />{message}</div>;
-}
-
-type UiIconName = "settings" | "language" | "logout" | "chevron" | "search" | "profile" | "appearance" | "memory" | "system" | "light" | "dark" | "edit" | "shield" | "pin" | "archive" | "remove" | "folder" | "organization";
-
-function UiIcon({ name }: { name: UiIconName }) {
-  const paths: Record<UiIconName, ReactNode> = {
-    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.9 1.9-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1 1.55V20h-2.7v-.09a1.7 1.7 0 0 0-1.07-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-1.9-1.9.06-.06A1.7 1.7 0 0 0 7.75 15a1.7 1.7 0 0 0-1.55-1H6v-2.7h.09a1.7 1.7 0 0 0 1.55-1.07 1.7 1.7 0 0 0-.34-1.88l-.06-.06 1.9-1.9.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 12.1 5.2V5h2.7v.09a1.7 1.7 0 0 0 1.07 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.9 1.9-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.8 11v2.7h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>,
-    language: <><circle cx="12" cy="12" r="8.5" /><path d="M3.8 12h16.4M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5S14.3 18.1 12 20.5M12 3.5C9.7 5.9 8.6 8.7 8.6 12s1.1 6.1 3.4 8.5" /></>,
-    logout: <><path d="M10 5H6.5A2.5 2.5 0 0 0 4 7.5v9A2.5 2.5 0 0 0 6.5 19H10" /><path d="m14 8 4 4-4 4M18 12H9" /></>,
-    chevron: <path d="m9 6 6 6-6 6" />,
-    search: <><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 4.5 4.5" /></>,
-    profile: <><circle cx="12" cy="8" r="3.5" /><path d="M5.5 19c.8-3.2 3-5 6.5-5s5.7 1.8 6.5 5" /></>,
-    appearance: <><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6 6 18" /></>,
-    memory: <><path d="M7 5.5h8.5A2.5 2.5 0 0 1 18 8v10l-6-3-6 3V6.5A1 1 0 0 1 7 5.5Z" /><path d="M9 9h6" /></>,
-    system: <><rect x="3.5" y="4.5" width="17" height="11" rx="2" /><path d="M9 19.5h6M12 15.5v4" /></>,
-    light: <><circle cx="12" cy="12" r="3.5" /><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" /></>,
-    dark: <path d="M19.5 15.5A8 8 0 0 1 8.5 4.5a8.2 8.2 0 1 0 11 11Z" />,
-    edit: <><path d="m5 16-.7 3.7L8 19l9.8-9.8-3-3L5 16Z" /><path d="m13.8 7.2 3 3" /></>,
-    shield: <><path d="M12 3.5 19 6v5.4c0 4.2-2.3 7.1-7 9.1-4.7-2-7-4.9-7-9.1V6l7-2.5Z" /><path d="m9 12 2 2 4-4" /></>,
-    pin: <><path d="m14 4 6 6-3 1-3.5 3.5 1 3-1.5 1.5-4-4-4.5 4.5" /><path d="m7 8 3 1L13.5 5l.5-1Z" /></>,
-    archive: <><rect x="4" y="5" width="16" height="4" rx="1" /><path d="M6 9v9.5h12V9M10 13h4" /></>,
-    remove: <><path d="M5 5l14 14M19 5 5 19" /></>,
-    folder: <><path d="M3.5 7.5h6l2-2h8a1.5 1.5 0 0 1 1.5 1.5v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a1.5 1.5 0 0 1 .5-1.5Z" /><path d="M3.5 9h17.5" /></>,
-    organization: <><path d="M5 20V9l4-3v14M9 20h10V4l-6 3v13M3 20h18" /><path d="M12 10h2M12 14h2M16 8h1M16 12h1" /></>,
-  };
-  return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
-}

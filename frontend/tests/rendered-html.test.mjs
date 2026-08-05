@@ -23,7 +23,7 @@ test("includes accessible controls for login and first-use security", async () =
 test("prototype source contains the required functional contracts", async () => {
   const demoPrototype = await readFile(new URL("../app/demo/prototype.tsx", import.meta.url), "utf8");
   const data = await readFile(new URL("../app/demo/prototype-data.ts", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../src/styles/globals.css", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.match(demoPrototype, /accept="\.pdf,\.docx,\.xlsx,\.pptx"/);
   assert.match(demoPrototype, /十个标准演示场景/);
