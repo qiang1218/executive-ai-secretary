@@ -1,0 +1,149 @@
+# ============================================================
+# Executive AI Secretary — Docker Compose
+# ============================================================
+# 首次启动（含初始化）：
+#   docker compose up -d --build          # 构建并启动所有服务
+#   docker compose run --rm init          # 跑迁移 + 建企业 + 建用户
+#
+# 日常启动：docker compose up -d
+# 查看日志：docker compose logs -f
+# 停止：docker compose down
+# 重新构建：docker compose build
+#
+# 目录约定（相对于 docker-compose.yml 所在位置）：
+#   ../frontend        前端源码
+#   ../backend         后端源码
+#   ../hermes-runtime   hermes-runtime 源码（worker 需要）
+# ============================================================
+
+x-env-app: &env-app
+  DATABASE_URL: postgresql+psycopg://executive_ai:${DB_PASSWORD:-executive_ai_dev_2026}@db:5432/executive_ai
+  APP_ENV: ${APP_ENV:-development}
+  APP_MODE: ${APP_MODE:-demo}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  FILE_STORAGE_ROOT: /app/runtime/files
+  FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY}
+  FILE_ENCRYPTION_KEY_VERSION: ${FILE_ENCRYPTION_KEY_VERSION:-v1}
+  INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY}
+  INTEGRATION_ENCRYPTION_KEY_VERSION: ${INTEGRATION_ENCRYPTION_KEY_VERSION:-v1}
+  SESSION_SECRET: ${SESSION_SECRET}
+  CSRF_SECRET: ${CSRF_SECRET}
+  AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY}
+  AUDIT_HMAC_KEY_VERSION: ${AUDIT_HMAC_KEY_VERSION:-v1}
+  AUDIT_HMAC_LEGACY_KEY_VERSION: ${AUDIT_HMAC_LEGACY_KEY_VERSION:-v1}
+
+services:
+  # ─── 数据库 (PostgreSQL 16 + pgvector) ─────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: executive-ai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: executive_ai
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-executive_ai_dev_2026}
+      POSTGRES_DB: executive_ai
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      - "${DB_PORT:-15432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U executive_ai -d executive_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── 后端 API ──────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: executive-ai-backend
+    container_name: executive-ai-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *env-app
+      SERVICE_ROLE: api
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,api}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - api_files:/app/runtime/files
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── Worker（内置 hermes-runtime，与 api 共用镜像）─────────
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    image: executive-ai-backend
+    container_name: executive-ai-worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *env-app
+      SERVICE_ROLE: assistant_worker
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      HERMES_TIMEOUT_SECONDS: ${HERMES_TIMEOUT_SECONDS:-120}
+    # 覆盖 CMD：worker 模式，前台运行不启动 API
+    command: ["python", "main.py", "--worker"]
+    volumes:
+      - api_files:/app/runtime/files
+      - worker_hermes_home:/tmp/hermes-runtime
+
+  # ─── 前端 ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    image: executive-ai-frontend
+    container_name: executive-ai-frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+  # ─── 一次性初始化（迁移 + 建企业 + 建用户）─────────────────
+  # 复用 api 镜像，覆盖 entrypoint
+  # 用法：docker compose run --rm init
+  init:
+    image: executive-ai-backend
+    container_name: executive-ai-init
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *env-app
+      SERVICE_ROLE: api
+      FRONTEND_PORT: ${FRONTEND_PORT:-3000}
+      API_PORT: ${API_PORT:-8000}
+    entrypoint: ["bash", "/app/deploy/init-seed.sh"]
+    profiles:
+      - init
+
+volumes:
+  db_data:
+    driver: local
+  api_files:
+    driver: local
+  worker_hermes_home:
+    driver: local

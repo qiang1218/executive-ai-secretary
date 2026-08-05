@@ -8,16 +8,16 @@
 
 ## 架构说明
 
-hermes-runtime 已合并进 worker 进程，**不再作为独立服务部署**。worker 启动时直接在进程内 import 调用 hermes-runtime 的 `execute_run()`，省去 HTTP + HMAC 一跳。
+hermes-runtime 已合并进 worker 进程（`backend/src/worker/hermes_runtime.py`），**不再作为独立服务/目录存在**。
 
 ```
 frontend (3000) ──HTTP──> backend API (8000)
                              │
                              ├── 写库 + NOTIFY new_job ──> PostgreSQL
                              │                                │
-worker (内置 hermes-runtime) ◄── LISTEN new_job ──────────────┘
+worker ◄── LISTEN new_job ───────────────────────────────────┘
    └─ claim_one → ThreadPoolExecutor 异步执行 process
-        └─ execute_run() 进程内调用
+        └─ hermes_runtime.execute_run() 进程内调用
              └─ subprocess: hermes --oneshot (MCP 工具循环) → Anspire
 ```
 

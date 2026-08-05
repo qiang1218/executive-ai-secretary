@@ -78,9 +78,20 @@ class PermanentJobError(Exception):
         super().__init__(message)
 
 
+# 模块级变量：LISTEN 连接引用，供 stop() 关闭以立即中断阻塞
+_listen_conn_ref: list = []
+
+
 def stop(*_: object) -> None:
     global stopping
     stopping = True
+    # 关闭 LISTEN 连接，中断 conn.notifies(timeout=60) 阻塞
+    global _listen_conn_ref
+    for conn in _listen_conn_ref:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _database_now(db):
@@ -674,10 +685,12 @@ def run_worker() -> None:
         """独立线程：用 psycopg 同步连接 LISTEN new_job，收到通知时 set Event。"""
         import psycopg
 
+        conn = None
         try:
-            # psycopg 3 不支持 SQLAlchemy 的 +psycopg 方言前缀，需去掉
             dsn = settings.database_url.replace("postgresql+psycopg://", "postgresql://")
             conn = psycopg.connect(dsn, autocommit=True)
+            global _listen_conn_ref
+            _listen_conn_ref.append(conn)
             conn.execute("LISTEN new_job")
             logger.info(
                 "worker_listening", extra={"structured": {"channel": "new_job"}}
@@ -688,10 +701,17 @@ def run_worker() -> None:
                 for _notification in gen:
                     notify_event.set()
         except Exception as exc:
-            listen_error.append(str(exc))
-            logger.exception("listen_thread_failed")
+            if not stopping:
+                listen_error.append(str(exc))
+                logger.exception("listen_thread_failed")
         finally:
-            notify_event.set()  # 出错时唤醒主线程，让它检测 stopping
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _listen_conn_ref.clear()
+            notify_event.set()  # 出错或关闭时唤醒主线程，让它检测 stopping
 
     listen_t = _threading.Thread(target=_listen_thread, daemon=True)
     listen_t.start()
