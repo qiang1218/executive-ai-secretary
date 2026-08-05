@@ -105,13 +105,14 @@ services:
       - api_files:/app/runtime/files
       - worker_hermes_home:/tmp/hermes-runtime
 
-  # ─── 前端 ──────────────────────────────────────────────────
-  frontend:
+  # ─── 前端 vinext ──────────────────────────────────────────
+  frontend-vinext:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
-    image: executive-ai-frontend
-    container_name: executive-ai-frontend
+      target: runner
+    image: executive-ai-frontend-vinext
+    container_name: executive-ai-frontend-vinext
     restart: unless-stopped
     depends_on:
       api:
@@ -119,6 +120,21 @@ services:
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    expose:
+      - "3001"
+
+  # ─── 前端 nginx (对外入口) ────────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      target: final
+    image: executive-ai-frontend
+    container_name: executive-ai-frontend
+    restart: unless-stopped
+    depends_on:
+      - frontend-vinext
+      - api
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
 
