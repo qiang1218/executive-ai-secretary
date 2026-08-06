@@ -26,7 +26,7 @@ from exceptions.errors import (
     validation_error_handler,
 )
 from logs.config import configure_logging
-from middleware import RequestContextMiddleware
+from api.middlewares import RequestContextMiddleware
 
 from configs.settings import get_settings
 
