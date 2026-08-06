@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import AuditEvent, User, UserSession
 from repositories.audit import client_ip, record_audit
@@ -25,13 +25,13 @@ class AuditService:
     """Service for recording audit events.
 
     Mirrors the anspire ``Service`` convention: stateless business logic
-    layered on top of a SQLAlchemy ``Session``.
+    layered on top of a SQLAlchemy ``AsyncSession``.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def record(
+    async def record(
         self,
         request: Request,
         action: str,
@@ -45,7 +45,7 @@ class AuditService:
         metadata: dict[str, Any] | None = None,
     ) -> AuditEvent:
         """Record an audit event for the current request."""
-        return record_audit(
+        return await record_audit(
             self._session,
             request,
             action,

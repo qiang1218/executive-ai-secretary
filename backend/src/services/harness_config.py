@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions.errors import AppError
 from worker.mcp_registry import MCP_TOOL_SPECS
@@ -239,8 +239,8 @@ def default_harness_config() -> dict[str, Any]:
     return validate_harness_config(copy.deepcopy(DEFAULT_HARNESS_CONFIG))
 
 
-def active_harness_config(db: Session, enterprise_id: uuid.UUID) -> HarnessConfigVersion:
-    row = db.scalar(
+async def active_harness_config(db: AsyncSession, enterprise_id: uuid.UUID) -> HarnessConfigVersion:
+    row = await db.scalar(
         select(HarnessConfigVersion).where(
             HarnessConfigVersion.enterprise_id == enterprise_id,
             HarnessConfigVersion.is_active.is_(True),
@@ -260,10 +260,10 @@ def active_harness_config(db: Session, enterprise_id: uuid.UUID) -> HarnessConfi
     )
     db.add(row)
     try:
-        db.flush()
+        await db.flush()
     except IntegrityError:
-        db.rollback()
-        existing = db.scalar(
+        await db.rollback()
+        existing = await db.scalar(
             select(HarnessConfigVersion).where(
                 HarnessConfigVersion.enterprise_id == enterprise_id,
                 HarnessConfigVersion.is_active.is_(True),
@@ -275,9 +275,9 @@ def active_harness_config(db: Session, enterprise_id: uuid.UUID) -> HarnessConfi
     return row
 
 
-def next_harness_version(db: Session, enterprise_id: uuid.UUID) -> int:
+async def next_harness_version(db: AsyncSession, enterprise_id: uuid.UUID) -> int:
     return int(
-        db.scalar(
+        await db.scalar(
             select(func.coalesce(func.max(HarnessConfigVersion.version), 0)).where(
                 HarnessConfigVersion.enterprise_id == enterprise_id
             )

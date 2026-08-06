@@ -11,7 +11,6 @@ from typing import Any
 
 from sqlalchemy import Connection, Select, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from configs.settings import get_settings
@@ -165,32 +164,17 @@ def _create_chain_head_if_missing(
         "updated_at": datetime.now(UTC),
     }
     values["anchor_hash"] = calculate_chain_anchor(values, key)
-    if connection.dialect.name == "postgresql":
-        statement = (
-            postgresql_insert(AuditChainHead)
-            .values(**values)
-            .on_conflict_do_nothing(index_elements=["chain_scope"])
-        )
-    elif connection.dialect.name == "sqlite":
-        statement = (
-            sqlite_insert(AuditChainHead)
-            .values(**values)
-            .on_conflict_do_nothing(index_elements=["chain_scope"])
-        )
-    else:
-        exists = connection.scalar(
-            select(AuditChainHead.chain_scope).where(AuditChainHead.chain_scope == chain_scope)
-        )
-        if exists is not None:
-            return
-        statement = AuditChainHead.__table__.insert().values(**values)
+    statement = (
+        postgresql_insert(AuditChainHead)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["chain_scope"])
+    )
     connection.execute(statement)
 
 
 def _locked_head(connection: Connection, chain_scope: str) -> Mapping[str, Any]:
     statement = select(AuditChainHead.__table__).where(AuditChainHead.chain_scope == chain_scope)
-    if connection.dialect.name == "postgresql":
-        statement = statement.with_for_update()
+    statement = statement.with_for_update()
     return connection.execute(statement).mappings().one()
 
 

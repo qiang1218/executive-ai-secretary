@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 
 from sqlalchemy import MetaData, create_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from configs.settings import get_settings
@@ -21,21 +27,29 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
+
+
+def _to_sync_url(url: str) -> str:
+    """将异步 database_url (asyncpg) 转换为同步驱动 URL (psycopg)。
+
+    worker / migration / seed 等同步链路使用 psycopg 驱动。
+    """
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    return url
+
+
+# ---------------------------------------------------------------------------
+# 同步引擎（worker / migration / seed 仍使用）
+# ---------------------------------------------------------------------------
+_sync_url = _to_sync_url(settings.database_url)
 engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
-if not settings.database_url.startswith("sqlite"):
-    engine_kwargs.update(
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
-    )
-elif settings.database_url.endswith(":memory:"):
-    from sqlalchemy.pool import StaticPool
+engine_kwargs.update(
+    pool_size=settings.database_pool_size,
+    max_overflow=settings.database_max_overflow,
+)
 
-    engine_kwargs.update(
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-engine = create_engine(settings.database_url, **engine_kwargs)
+engine = create_engine(_sync_url, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
@@ -45,3 +59,25 @@ def get_db() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# 异步引擎（API 链路使用）
+# ---------------------------------------------------------------------------
+_async_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+_async_engine_kwargs.update(
+    pool_size=settings.database_pool_size,
+    max_overflow=settings.database_max_overflow,
+)
+
+async_engine: AsyncEngine = create_async_engine(
+    settings.database_url, **_async_engine_kwargs
+)
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine, expire_on_commit=False, autoflush=False
+)
+
+
+async def get_db_async() -> AsyncIterator[AsyncSession]:
+    async with AsyncSessionLocal() as session:
+        yield session

@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import AuditEvent, User, UserSession
 
@@ -13,8 +13,8 @@ def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def record_audit(
-    db: Session,
+async def record_audit(
+    db: AsyncSession,
     request: Request,
     action: str,
     *,

@@ -97,7 +97,7 @@ class ResolvedSourceConnection:
     secret_reference_key: str
 
 
-def require_isolated_data_source(db: Session, data_source: DataSource) -> None:
+async def require_isolated_data_source(db: Session, data_source: DataSource) -> None:
     """Fail closed while phase 2 supports one enabled source per deployment.
 
     The product database is tenant-aware, but source PostgreSQL does not yet carry
@@ -107,7 +107,7 @@ def require_isolated_data_source(db: Session, data_source: DataSource) -> None:
     shared global URL or on human naming conventions.
     """
 
-    conflict = db.scalar(
+    conflict = await db.scalar(
         select(DataSource.id).where(
             DataSource.is_enabled.is_(True),
             DataSource.id != data_source.id,

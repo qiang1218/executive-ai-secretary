@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.anspire import ANSPIRE_MODELS, validate_anspire_model
 from exceptions.errors import AppError
@@ -22,18 +22,18 @@ def model_catalog_item(model_id: str) -> dict[str, object]:
     return item
 
 
-def provider_config(db: Session, enterprise_id: uuid.UUID) -> ModelProviderConfig | None:
-    return db.scalar(
+async def provider_config(db: AsyncSession, enterprise_id: uuid.UUID) -> ModelProviderConfig | None:
+    return await db.scalar(
         select(ModelProviderConfig).where(ModelProviderConfig.enterprise_id == enterprise_id)
     )
 
 
-def model_authorization(
-    db: Session,
+async def model_authorization(
+    db: AsyncSession,
     enterprise_id: uuid.UUID,
     model_id: str,
 ) -> EnterpriseModelAuthorization | None:
-    return db.scalar(
+    return await db.scalar(
         select(EnterpriseModelAuthorization).where(
             EnterpriseModelAuthorization.enterprise_id == enterprise_id,
             EnterpriseModelAuthorization.model_id == model_id,
@@ -54,14 +54,14 @@ def authorization_is_current(
     )
 
 
-def authorized_model_rows(
-    db: Session,
+async def authorized_model_rows(
+    db: AsyncSession,
     enterprise_id: uuid.UUID,
 ) -> list[EnterpriseModelAuthorization]:
-    config = provider_config(db, enterprise_id)
+    config = await provider_config(db, enterprise_id)
     if config is None:
         return []
-    rows = db.scalars(
+    result = await db.execute(
         select(EnterpriseModelAuthorization)
         .where(
             EnterpriseModelAuthorization.enterprise_id == enterprise_id,
@@ -71,16 +71,17 @@ def authorized_model_rows(
             EnterpriseModelAuthorization.is_default.desc(),
             EnterpriseModelAuthorization.display_name,
         )
-    ).all()
+    )
+    rows = result.scalars().all()
     return [row for row in rows if authorization_is_current(row, config)]
 
 
-def resolve_authorized_model(
-    db: Session,
+async def resolve_authorized_model(
+    db: AsyncSession,
     enterprise_id: uuid.UUID,
     requested_model_id: str | None,
 ) -> str:
-    rows = authorized_model_rows(db, enterprise_id)
+    rows = await authorized_model_rows(db, enterprise_id)
     if not rows:
         raise AppError(
             409,
@@ -100,13 +101,13 @@ def resolve_authorized_model(
     return (default or rows[0]).model_id
 
 
-def ensure_authorization_row(
-    db: Session,
+async def ensure_authorization_row(
+    db: AsyncSession,
     enterprise_id: uuid.UUID,
     model_id: str,
 ) -> EnterpriseModelAuthorization:
     item = model_catalog_item(model_id)
-    row = model_authorization(db, enterprise_id, str(item["id"]))
+    row = await model_authorization(db, enterprise_id, str(item["id"]))
     if row is None:
         row = EnterpriseModelAuthorization(
             enterprise_id=enterprise_id,
@@ -117,5 +118,5 @@ def ensure_authorization_row(
             is_default=False,
         )
         db.add(row)
-        db.flush()
+        await db.flush()
     return row

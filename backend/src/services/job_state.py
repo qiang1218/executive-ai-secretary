@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Job, Message
 
@@ -23,13 +23,13 @@ class JobStateService:
     """Service for transitioning job state and closing placeholder messages.
 
     Mirrors the anspire ``Service`` convention: stateless business logic
-    layered on top of a SQLAlchemy ``Session``.
+    layered on top of a SQLAlchemy ``AsyncSession``.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def close_assistant_placeholder(
+    async def close_assistant_placeholder(
         self,
         job: Job,
         *,
@@ -42,7 +42,7 @@ class JobStateService:
             message_id = uuid.UUID(str(raw_id))
         except (TypeError, ValueError):
             return None
-        message = self._session.get(Message, message_id)
+        message = await self._session.get(Message, message_id)
         if message is None or message.role != "assistant":
             return None
         message.status = status
@@ -53,12 +53,12 @@ class JobStateService:
 
 # Backward-compatible facade: ``close_assistant_placeholder(db, job, ...)``.
 # New code should prefer ``JobStateService(db).close_assistant_placeholder(job, ...)``.
-def close_assistant_placeholder(
-    db: Session,
+async def close_assistant_placeholder(
+    db: AsyncSession,
     job: Job,
     *,
     status: str,
     content: str | None = None,
 ) -> Message | None:
     """Module-level facade around :class:`JobStateService`."""
-    return JobStateService(db).close_assistant_placeholder(job, status=status, content=content)
+    return await JobStateService(db).close_assistant_placeholder(job, status=status, content=content)

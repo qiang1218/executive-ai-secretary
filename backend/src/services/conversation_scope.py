@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.authz import Principal, accessible_organization_unit_ids
 from exceptions.errors import AppError
@@ -19,12 +19,12 @@ def legacy_scope(organization_unit_id: uuid.UUID | None) -> OrganizationScopeInp
     )
 
 
-def normalize_scope(
-    db: Session,
+async def normalize_scope(
+    db: AsyncSession,
     principal: Principal,
     scope: OrganizationScopeInput,
 ) -> tuple[OrganizationScopeInput, list[uuid.UUID]]:
-    allowed = accessible_organization_unit_ids(db, principal)
+    allowed = await accessible_organization_unit_ids(db, principal)
     if scope.mode == "all_authorized":
         return scope, sorted(allowed, key=str)
     requested = set(scope.organization_unit_ids)
@@ -45,16 +45,17 @@ def normalize_scope(
     )
 
 
-def persisted_scope(db: Session, conversation: Conversation) -> OrganizationScopeInput:
+async def persisted_scope(
+    db: AsyncSession, conversation: Conversation
+) -> OrganizationScopeInput:
     if conversation.scope_mode == "all_authorized":
         return OrganizationScopeInput(mode="all_authorized", organization_unit_ids=[])
-    ids = list(
-        db.scalars(
-            select(ConversationOrganizationScope.organization_unit_id)
-            .where(ConversationOrganizationScope.conversation_id == conversation.id)
-            .order_by(ConversationOrganizationScope.organization_unit_id)
-        ).all()
+    result = await db.scalars(
+        select(ConversationOrganizationScope.organization_unit_id)
+        .where(ConversationOrganizationScope.conversation_id == conversation.id)
+        .order_by(ConversationOrganizationScope.organization_unit_id)
     )
+    ids = list(result.all())
     if not ids and conversation.organization_unit_id is not None:
         ids = [conversation.organization_unit_id]
     if not ids:
@@ -63,12 +64,12 @@ def persisted_scope(db: Session, conversation: Conversation) -> OrganizationScop
     return OrganizationScopeInput(mode="selected", organization_unit_ids=ids)
 
 
-def set_conversation_scope(
-    db: Session,
+async def set_conversation_scope(
+    db: AsyncSession,
     conversation: Conversation,
     scope: OrganizationScopeInput,
 ) -> None:
-    db.execute(
+    await db.execute(
         delete(ConversationOrganizationScope).where(
             ConversationOrganizationScope.conversation_id == conversation.id
         )
@@ -89,16 +90,16 @@ def set_conversation_scope(
             )
     # Callers can serialize the scope before committing. Flush here so a
     # subsequent persisted_scope() never observes an empty selected set.
-    db.flush()
+    await db.flush()
 
 
-def scope_out(
-    db: Session,
+async def scope_out(
+    db: AsyncSession,
     principal: Principal,
     conversation: Conversation,
 ) -> OrganizationScopeOut:
-    scope = persisted_scope(db, conversation)
-    normalized, resolved = normalize_scope(db, principal, scope)
+    scope = await persisted_scope(db, conversation)
+    normalized, resolved = await normalize_scope(db, principal, scope)
     return OrganizationScopeOut(
         mode=normalized.mode,
         organization_unit_ids=normalized.organization_unit_ids,

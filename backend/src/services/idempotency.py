@@ -10,8 +10,7 @@ from fastapi import Request
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.authz import Principal
 from exceptions.errors import AppError
@@ -37,8 +36,8 @@ def _scope_filter(
     )
 
 
-def _reserve(
-    db: Session,
+async def _reserve(
+    db: AsyncSession,
     request: Request,
     principal: Principal,
     key: str,
@@ -68,52 +67,25 @@ def _reserve(
         "expires_at": expires_at,
         "created_at": now,
     }
-    dialect_name = db.get_bind().dialect.name
-    if dialect_name == "postgresql":
-        statement = postgresql_insert(IdempotencyRecord).values(**values)
-        statement = statement.on_conflict_do_update(
-            constraint="uq_idempotency_scope",
-            set_={
-                "request_hash": fingerprint,
-                "response_status": None,
-                "response_json": None,
-                "expires_at": expires_at,
-                "created_at": now,
-            },
-            where=IdempotencyRecord.expires_at <= now,
-        )
-    elif dialect_name == "sqlite":
-        statement = sqlite_insert(IdempotencyRecord).values(**values)
-        statement = statement.on_conflict_do_update(
-            index_elements=["user_id", "method", "path", "idempotency_key"],
-            set_={
-                "request_hash": fingerprint,
-                "response_status": None,
-                "response_json": None,
-                "expires_at": expires_at,
-                "created_at": now,
-            },
-            where=IdempotencyRecord.expires_at <= now,
-        )
-    else:
-        existing = db.scalar(
-            select(IdempotencyRecord).where(*_scope_filter(request, principal, key))
-        )
-        if existing is not None and existing.expires_at > now:
-            return False
-        if existing is not None:
-            db.delete(existing)
-            db.flush()
-        db.add(IdempotencyRecord(**values))
-        db.flush()
-        return True
+    statement = postgresql_insert(IdempotencyRecord).values(**values)
+    statement = statement.on_conflict_do_update(
+        constraint="uq_idempotency_scope",
+        set_={
+            "request_hash": fingerprint,
+            "response_status": None,
+            "response_json": None,
+            "expires_at": expires_at,
+            "created_at": now,
+        },
+        where=IdempotencyRecord.expires_at <= now,
+    )
 
     statement = statement.returning(IdempotencyRecord.id)
-    return db.scalar(statement) is not None
+    return (await db.scalar(statement)) is not None
 
 
-def replay(
-    db: Session,
+async def replay(
+    db: AsyncSession,
     request: Request,
     principal: Principal,
     payload: Any,
@@ -124,9 +96,9 @@ def replay(
     if len(key) > 200:
         raise AppError(422, "invalid_idempotency_key", "Idempotency-Key 过长")
     fingerprint = request_fingerprint(payload)
-    if _reserve(db, request, principal, key, fingerprint):
+    if await _reserve(db, request, principal, key, fingerprint):
         return None
-    record = db.scalar(select(IdempotencyRecord).where(*_scope_filter(request, principal, key)))
+    record = await db.scalar(select(IdempotencyRecord).where(*_scope_filter(request, principal, key)))
     if record is None:
         raise AppError(409, "idempotency_retry", "幂等请求状态已变更，请重试")
     if record.request_hash != fingerprint:
@@ -140,8 +112,8 @@ def replay(
     return record.response_status, record.response_json
 
 
-def save_response(
-    db: Session,
+async def save_response(
+    db: AsyncSession,
     request: Request,
     principal: Principal,
     payload: Any,
@@ -151,7 +123,7 @@ def save_response(
     key = request.headers.get("Idempotency-Key")
     if not key:
         return
-    record = db.scalar(select(IdempotencyRecord).where(*_scope_filter(request, principal, key)))
+    record = await db.scalar(select(IdempotencyRecord).where(*_scope_filter(request, principal, key)))
     if record is None:
         raise AppError(500, "idempotency_reservation_missing", "幂等请求预占状态缺失")
     if record.request_hash != request_fingerprint(payload):

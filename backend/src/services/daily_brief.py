@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Iterable
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from configs.settings import Settings
 from services.data_freshness import effective_domain_status
@@ -37,8 +37,8 @@ def _opaque_batch_id(source_batch_id: str | None) -> str | None:
     return f"batch_{digest}"
 
 
-def _latest_successful_batch_ids(db: Session, enterprise_id: uuid.UUID) -> list[str]:
-    rows = db.scalars(
+async def _latest_successful_batch_ids(db: AsyncSession, enterprise_id: uuid.UUID) -> list[str]:
+    result = await db.execute(
         select(DataSyncRun.source_batch_id)
         .where(
             DataSyncRun.enterprise_id == enterprise_id,
@@ -53,12 +53,13 @@ def _latest_successful_batch_ids(db: Session, enterprise_id: uuid.UUID) -> list[
                 DataSyncRun.created_at,
             ).desc()
         )
-    ).all()
+    )
+    rows = result.scalars().all()
     return list(dict.fromkeys(value for value in rows if value))
 
 
-def _latest_snapshots_for_batch(
-    db: Session,
+async def _latest_snapshots_for_batch(
+    db: AsyncSession,
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
@@ -66,7 +67,7 @@ def _latest_snapshots_for_batch(
     covers_all_connected_units: bool,
 ) -> tuple[list[DailySnapshot], bool]:
     if covers_all_connected_units:
-        enterprise_snapshot = db.scalar(
+        enterprise_snapshot = await db.scalar(
             select(DailySnapshot)
             .where(
                 DailySnapshot.enterprise_id == enterprise_id,
@@ -82,7 +83,7 @@ def _latest_snapshots_for_batch(
         if enterprise_snapshot is not None:
             return [enterprise_snapshot], True
 
-    rows = db.scalars(
+    result = await db.execute(
         select(DailySnapshot)
         .where(
             DailySnapshot.enterprise_id == enterprise_id,
@@ -93,7 +94,8 @@ def _latest_snapshots_for_batch(
             DailySnapshot.snapshot_date.desc(),
             DailySnapshot.source_data_as_of.desc(),
         )
-    ).all()
+    )
+    rows = result.scalars().all()
     latest_by_unit: dict[uuid.UUID, DailySnapshot] = {}
     for row in rows:
         if row.organization_unit_id is not None:
@@ -101,8 +103,8 @@ def _latest_snapshots_for_batch(
     return list(latest_by_unit.values()), False
 
 
-def _latest_legacy_snapshots(
-    db: Session,
+async def _latest_legacy_snapshots(
+    db: AsyncSession,
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
@@ -111,7 +113,7 @@ def _latest_legacy_snapshots(
     """Read pre-batch snapshots without ever using an enterprise row for a partial scope."""
 
     if covers_all_connected_units:
-        enterprise_snapshot = db.scalar(
+        enterprise_snapshot = await db.scalar(
             select(DailySnapshot)
             .where(
                 DailySnapshot.enterprise_id == enterprise_id,
@@ -127,7 +129,7 @@ def _latest_legacy_snapshots(
         if enterprise_snapshot is not None:
             return [enterprise_snapshot], True
 
-    rows = db.scalars(
+    result = await db.execute(
         select(DailySnapshot)
         .where(
             DailySnapshot.enterprise_id == enterprise_id,
@@ -138,7 +140,8 @@ def _latest_legacy_snapshots(
             DailySnapshot.snapshot_date.desc(),
             DailySnapshot.source_data_as_of.desc(),
         )
-    ).all()
+    )
+    rows = result.scalars().all()
     if not rows:
         return [], False
     newest_date = rows[0].snapshot_date
@@ -151,15 +154,15 @@ def _latest_legacy_snapshots(
     return list(latest_by_unit.values()), False
 
 
-def _resolve_snapshots(
-    db: Session,
+async def _resolve_snapshots(
+    db: AsyncSession,
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
     covers_all_connected_units: bool,
 ) -> tuple[list[DailySnapshot], bool, str | None]:
-    for source_batch_id in _latest_successful_batch_ids(db, enterprise_id):
-        rows, uses_enterprise_snapshot = _latest_snapshots_for_batch(
+    for source_batch_id in await _latest_successful_batch_ids(db, enterprise_id):
+        rows, uses_enterprise_snapshot = await _latest_snapshots_for_batch(
             db,
             enterprise_id=enterprise_id,
             organization_unit_ids=organization_unit_ids,
@@ -168,7 +171,7 @@ def _resolve_snapshots(
         )
         if rows:
             return rows, uses_enterprise_snapshot, source_batch_id
-    rows, uses_enterprise_snapshot = _latest_legacy_snapshots(
+    rows, uses_enterprise_snapshot = await _latest_legacy_snapshots(
         db,
         enterprise_id=enterprise_id,
         organization_unit_ids=organization_unit_ids,
@@ -190,15 +193,15 @@ def _metric_total(snapshots: Iterable[DailySnapshot], name: str) -> tuple[bool, 
     return found, total
 
 
-def _fact_count(
-    db: Session,
+async def _fact_count(
+    db: AsyncSession,
     model: type[FactOpportunity | FactDelivery | FactFinanceCollection | FactTarget],
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
 ) -> int:
     return int(
-        db.scalar(
+        await db.scalar(
             select(func.count(model.id)).where(
                 model.enterprise_id == enterprise_id,
                 model.organization_unit_id.in_(organization_unit_ids),
@@ -209,32 +212,32 @@ def _fact_count(
     )
 
 
-def _scoped_record_counts(
-    db: Session,
+async def _scoped_record_counts(
+    db: AsyncSession,
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
 ) -> dict[str, int]:
     return {
-        "opportunity": _fact_count(
+        "opportunity": await _fact_count(
             db,
             FactOpportunity,
             enterprise_id=enterprise_id,
             organization_unit_ids=organization_unit_ids,
         ),
-        "delivery": _fact_count(
+        "delivery": await _fact_count(
             db,
             FactDelivery,
             enterprise_id=enterprise_id,
             organization_unit_ids=organization_unit_ids,
         ),
-        "collection": _fact_count(
+        "collection": await _fact_count(
             db,
             FactFinanceCollection,
             enterprise_id=enterprise_id,
             organization_unit_ids=organization_unit_ids,
         ),
-        "target": _fact_count(
+        "target": await _fact_count(
             db,
             FactTarget,
             enterprise_id=enterprise_id,
@@ -243,18 +246,19 @@ def _scoped_record_counts(
     }
 
 
-def _domain_readiness(
-    db: Session,
+async def _domain_readiness(
+    db: AsyncSession,
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
     settings: Settings,
 ) -> list[DailyBriefDomainReadinessOut]:
-    rows = db.scalars(
+    result = await db.execute(
         select(DataDomainStatus).where(DataDomainStatus.enterprise_id == enterprise_id)
-    ).all()
+    )
+    rows = result.scalars().all()
     by_domain = {row.domain: row for row in rows}
-    record_counts = _scoped_record_counts(
+    record_counts = await _scoped_record_counts(
         db,
         enterprise_id=enterprise_id,
         organization_unit_ids=organization_unit_ids,
@@ -314,8 +318,8 @@ def _brief_data_as_of(
     return min(snapshot_cutoffs, key=as_utc, default=None)
 
 
-def build_daily_brief(
-    db: Session,
+async def build_daily_brief(
+    db: AsyncSession,
     *,
     enterprise_id: uuid.UUID,
     organization_unit_ids: set[uuid.UUID],
@@ -323,7 +327,7 @@ def build_daily_brief(
     settings: Settings,
 ) -> DailyBriefOut:
     covers_all_connected_units = organization_unit_ids == connected_organization_unit_ids
-    snapshots, uses_enterprise_snapshot, source_batch_id = _resolve_snapshots(
+    snapshots, uses_enterprise_snapshot, source_batch_id = await _resolve_snapshots(
         db,
         enterprise_id=enterprise_id,
         organization_unit_ids=organization_unit_ids,
@@ -339,7 +343,7 @@ def build_daily_brief(
     overdue_count = int(overdue_count_total)
     if overdue_amount > 0 and not overdue_count_found:
         overdue_count = int(
-            db.scalar(
+            await db.scalar(
                 select(func.count(FactFinanceCollection.id)).where(
                     FactFinanceCollection.enterprise_id == enterprise_id,
                     FactFinanceCollection.organization_unit_id.in_(organization_unit_ids),
@@ -379,7 +383,7 @@ def build_daily_brief(
         for rule_id in ("delivery_delayed", "collection_overdue")
         if (item := items_by_rule.get(rule_id)) is not None
     ]
-    domains = _domain_readiness(
+    domains = await _domain_readiness(
         db,
         enterprise_id=enterprise_id,
         organization_unit_ids=organization_unit_ids,
@@ -413,11 +417,11 @@ class DailyBriefService:
     ``build_daily_brief(db, ..., settings=...)`` function; both are equivalent.
     """
 
-    def __init__(self, session: Session, settings: Settings) -> None:
+    def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self._session = session
         self._settings = settings
 
-    def build(
+    async def build(
         self,
         *,
         enterprise_id: uuid.UUID,
@@ -425,7 +429,7 @@ class DailyBriefService:
         connected_organization_unit_ids: set[uuid.UUID],
     ) -> DailyBriefOut:
         """Build the daily brief for the given enterprise and scope."""
-        return build_daily_brief(
+        return await build_daily_brief(
             self._session,
             enterprise_id=enterprise_id,
             organization_unit_ids=organization_unit_ids,

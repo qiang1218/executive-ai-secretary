@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     debug: bool = False
     api_prefix: str = "/api/v1"
 
-    database_url: str = "postgresql+psycopg://executive_ai:executive_ai@localhost:5432/executive_ai"
+    database_url: str = "postgresql+asyncpg://executive_ai:executive_ai@localhost:5432/executive_ai"
     database_pool_size: int = Field(default=10, ge=1, le=100)
     database_max_overflow: int = Field(default=20, ge=0, le=100)
     source_database_url: SecretStr | None = None

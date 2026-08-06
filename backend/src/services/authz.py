@@ -7,10 +7,10 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from configs.settings import Settings, get_settings
-from db.session import get_db
+from db.session import get_db_async
 from exceptions.errors import AppError
 from models import DataScopeGrant, Enterprise, OrganizationUnit, User, UserSession
 from core.security import as_utc, secure_equal, token_hash, utc_now
@@ -26,20 +26,21 @@ class Principal:
         return self.user.enterprise_id
 
 
-def _read_session(
+async def _read_session(
     request: Request,
-    db: Session,
+    db: AsyncSession,
     settings: Settings,
 ) -> Principal:
     raw_token = request.cookies.get(settings.session_cookie_name)
     if not raw_token:
         raise AppError(401, "authentication_required", "请先登录")
     hashed = token_hash(raw_token, settings.session_secret.get_secret_value())
-    row = db.execute(
+    result = await db.execute(
         select(UserSession, User)
         .join(User, User.id == UserSession.user_id)
         .where(UserSession.token_hash == hashed)
-    ).one_or_none()
+    )
+    row = result.one_or_none()
     if row is None:
         raise AppError(401, "invalid_session", "登录状态无效，请重新登录")
     user_session, user = row
@@ -54,7 +55,7 @@ def _read_session(
         raise AppError(403, "user_disabled", "账号已停用")
     if user.locked_until and as_utc(user.locked_until) > now:
         raise AppError(423, "user_locked", "账号暂时锁定")
-    enterprise = db.get(Enterprise, user.enterprise_id)
+    enterprise = await db.get(Enterprise, user.enterprise_id)
     if enterprise is None or not enterprise.is_active:
         raise AppError(403, "enterprise_disabled", "企业账号不可用")
     if as_utc(user_session.last_seen_at) < now - timedelta(minutes=5):
@@ -63,24 +64,24 @@ def _read_session(
             as_utc(user_session.expires_at),
             now + timedelta(seconds=settings.session_idle_seconds),
         )
-        db.commit()
+        await db.commit()
     return Principal(user=user, session=user_session)
 
 
-def get_authenticated_principal(
+async def get_authenticated_principal(
     request: Request,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_async)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Principal:
     cached = getattr(request.state, "principal", None)
     if isinstance(cached, Principal):
         return cached
-    principal = _read_session(request, db, settings)
+    principal = await _read_session(request, db, settings)
     request.state.principal = principal
     return principal
 
 
-def get_current_principal(
+async def get_current_principal(
     principal: Annotated[Principal, Depends(get_authenticated_principal)],
 ) -> Principal:
     if principal.user.password_change_required:
@@ -92,7 +93,7 @@ def get_current_principal(
     return principal
 
 
-def get_executive_principal(
+async def get_executive_principal(
     principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> Principal:
     if principal.user.role != "executive":
@@ -100,16 +101,16 @@ def get_executive_principal(
     return principal
 
 
-def csrf_protect(
+async def csrf_protect(
     request: Request,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_async)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> None:
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return
     if request.url.path == f"{settings.api_prefix}/auth/login":
         return
-    principal = _read_session(request, db, settings)
+    principal = await _read_session(request, db, settings)
     header = request.headers.get("X-CSRF-Token", "")
     cookie = request.cookies.get(settings.csrf_cookie_name, "")
     if not header or not cookie or not secure_equal(header, cookie):
@@ -120,7 +121,9 @@ def csrf_protect(
 
 
 def require_roles(*roles: str):
-    def dependency(principal: Annotated[Principal, Depends(get_current_principal)]) -> Principal:
+    async def dependency(
+        principal: Annotated[Principal, Depends(get_current_principal)],
+    ) -> Principal:
         if principal.user.role not in roles:
             raise AppError(403, "role_forbidden", "当前角色无权执行此操作")
         return principal
@@ -128,95 +131,102 @@ def require_roles(*roles: str):
     return dependency
 
 
-def accessible_organization_unit_ids(db: Session, principal: Principal) -> set[uuid.UUID]:
-    return accessible_organization_unit_ids_for_user(db, principal.user)
+async def accessible_organization_unit_ids(
+    db: AsyncSession, principal: Principal
+) -> set[uuid.UUID]:
+    return await accessible_organization_unit_ids_for_user(db, principal.user)
 
 
-def accessible_organization_unit_ids_for_user(db: Session, user: User) -> set[uuid.UUID]:
+async def accessible_organization_unit_ids_for_user(
+    db: AsyncSession, user: User
+) -> set[uuid.UUID]:
     analyzable_unit = (
         OrganizationUnit.enterprise_id == user.enterprise_id,
         OrganizationUnit.is_active.is_(True),
         OrganizationUnit.enabled_for_analysis.is_(True),
         OrganizationUnit.data_connected.is_(True),
     )
-    grants = db.scalars(
+    result = await db.execute(
         select(DataScopeGrant).where(
             DataScopeGrant.user_id == user.id,
             DataScopeGrant.can_read.is_(True),
         )
-    ).all()
+    )
+    grants = result.scalars().all()
     if any(grant.scope_kind == "enterprise" for grant in grants):
-        return set(db.scalars(select(OrganizationUnit.id).where(*analyzable_unit)).all())
+        result = await db.execute(
+            select(OrganizationUnit.id).where(*analyzable_unit)
+        )
+        return set(result.scalars().all())
     granted_root_ids = {
         grant.organization_unit_id for grant in grants if grant.organization_unit_id is not None
     }
-    roots = set(
-        db.scalars(
-            select(OrganizationUnit.id).where(
-                OrganizationUnit.id.in_(granted_root_ids),
-                *analyzable_unit,
-            )
-        ).all()
+    result = await db.execute(
+        select(OrganizationUnit.id).where(
+            OrganizationUnit.id.in_(granted_root_ids),
+            *analyzable_unit,
+        )
     )
+    roots = set(result.scalars().all())
     if not roots:
         return set()
     # The hierarchy is shallow in phase one; iterate to include configured descendants safely.
     accessible = set(roots)
     while True:
-        children = set(
-            db.scalars(
-                select(OrganizationUnit.id).where(
-                    OrganizationUnit.parent_id.in_(accessible),
-                    *analyzable_unit,
-                )
-            ).all()
+        result = await db.execute(
+            select(OrganizationUnit.id).where(
+                OrganizationUnit.parent_id.in_(accessible),
+                *analyzable_unit,
+            )
         )
+        children = set(result.scalars().all())
         expanded = accessible | children
         if expanded == accessible:
             return accessible
         accessible = expanded
 
 
-def assert_org_scope(
-    db: Session,
+async def assert_org_scope(
+    db: AsyncSession,
     principal: Principal,
     organization_unit_id: uuid.UUID | None,
 ) -> None:
-    allowed = accessible_organization_unit_ids(db, principal)
+    allowed = await accessible_organization_unit_ids(db, principal)
     if not allowed:
         raise AppError(403, "data_scope_forbidden", "当前账号没有有效的事业部查询范围")
     if organization_unit_id is not None and organization_unit_id not in allowed:
         raise AppError(403, "data_scope_forbidden", "该事业部不在您的可查询范围内")
 
 
-def build_scope_snapshot(
-    db: Session,
+async def build_scope_snapshot(
+    db: AsyncSession,
     principal: Principal,
     organization_unit_id: uuid.UUID | None = None,
 ) -> dict[str, object]:
-    assert_org_scope(db, principal, organization_unit_id)
-    grants = db.scalars(
+    await assert_org_scope(db, principal, organization_unit_id)
+    result = await db.execute(
         select(DataScopeGrant).where(
             DataScopeGrant.user_id == principal.user.id,
             DataScopeGrant.can_read.is_(True),
         )
-    ).all()
+    )
+    grants = result.scalars().all()
     enterprise_wide = organization_unit_id is None and any(
         item.scope_kind == "enterprise" for item in grants
     )
-    unit_ids = (
-        [organization_unit_id]
-        if organization_unit_id is not None
-        else sorted(accessible_organization_unit_ids(db, principal), key=str)
-    )
+    if organization_unit_id is not None:
+        unit_ids = [organization_unit_id]
+    else:
+        allowed = await accessible_organization_unit_ids(db, principal)
+        unit_ids = sorted(allowed, key=str)
     return {
         "enterprise_wide": enterprise_wide,
         "organization_unit_ids": [str(item) for item in unit_ids],
     }
 
 
-def build_assistant_scope_snapshot(
-    db: Session,
+async def build_assistant_scope_snapshot(
+    db: AsyncSession,
     principal: Principal,
     organization_unit_id: uuid.UUID | None = None,
 ) -> dict[str, object]:
@@ -228,9 +238,9 @@ def build_assistant_scope_snapshot(
     snapshot.
     """
 
-    allowed = accessible_organization_unit_ids(db, principal)
+    allowed = await accessible_organization_unit_ids(db, principal)
     if organization_unit_id is not None or allowed:
-        return build_scope_snapshot(db, principal, organization_unit_id)
+        return await build_scope_snapshot(db, principal, organization_unit_id)
     return {
         "enterprise_wide": False,
         "organization_unit_ids": [],
@@ -238,8 +248,8 @@ def build_assistant_scope_snapshot(
     }
 
 
-def scope_snapshot_is_current_for_user(
-    db: Session,
+async def scope_snapshot_is_current_for_user(
+    db: AsyncSession,
     user: User,
     snapshot: dict[str, object] | None,
 ) -> bool:
@@ -252,24 +262,24 @@ def scope_snapshot_is_current_for_user(
         return False
     if not required:
         return snapshot.get("general_only") is True
-    current = accessible_organization_unit_ids_for_user(db, user)
+    current = await accessible_organization_unit_ids_for_user(db, user)
     if not required.issubset(current):
         return False
     if snapshot.get("enterprise_wide"):
-        return (
-            db.scalar(
-                select(DataScopeGrant.id).where(
-                    DataScopeGrant.user_id == user.id,
-                    DataScopeGrant.scope_kind == "enterprise",
-                    DataScopeGrant.can_read.is_(True),
-                )
+        result = await db.scalar(
+            select(DataScopeGrant.id).where(
+                DataScopeGrant.user_id == user.id,
+                DataScopeGrant.scope_kind == "enterprise",
+                DataScopeGrant.can_read.is_(True),
             )
-            is not None
         )
+        return result is not None
     return True
 
 
-def organization_scope_predicate(db: Session, principal: Principal, column):
-    allowed = accessible_organization_unit_ids(db, principal)
+async def organization_scope_predicate(
+    db: AsyncSession, principal: Principal, column
+):
+    allowed = await accessible_organization_unit_ids(db, principal)
     # Enterprise-neutral records remain visible only when explicitly unscoped.
     return or_(column.is_(None), column.in_(allowed))

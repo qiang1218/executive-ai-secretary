@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Enterprise, OpportunityExperienceWeightPolicy
 
@@ -16,8 +16,8 @@ DEFAULT_EXPERIENCE_WEIGHTS: dict[str, float] = {
 DEFAULT_OBSERVATION_WINDOWS: tuple[int, ...] = (30, 60, 90)
 
 
-def ensure_default_opportunity_weight_policy(
-    db: Session,
+async def ensure_default_opportunity_weight_policy(
+    db: AsyncSession,
     enterprise_id: uuid.UUID,
     *,
     created_by_user_id: uuid.UUID | None = None,
@@ -34,16 +34,15 @@ def ensure_default_opportunity_weight_policy(
     # access to the enterprise row.  PostgreSQL SELECT FOR UPDATE requires
     # UPDATE privilege on the locked table, which would widen the worker's
     # security boundary solely for coordination.
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
-            {"scope": f"opportunity-experience-weight-policy:{enterprise_id}"},
-        )
-    enterprise = db.scalar(select(Enterprise).where(Enterprise.id == enterprise_id))
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+        {"scope": f"opportunity-experience-weight-policy:{enterprise_id}"},
+    )
+    enterprise = await db.scalar(select(Enterprise).where(Enterprise.id == enterprise_id))
     if enterprise is None:
         raise ValueError("enterprise_not_found")
 
-    active = db.scalar(
+    active = await db.scalar(
         select(OpportunityExperienceWeightPolicy)
         .where(
             OpportunityExperienceWeightPolicy.enterprise_id == enterprise_id,
@@ -55,7 +54,7 @@ def ensure_default_opportunity_weight_policy(
     if active is not None:
         return active
 
-    latest = db.scalar(
+    latest = await db.scalar(
         select(OpportunityExperienceWeightPolicy)
         .where(OpportunityExperienceWeightPolicy.enterprise_id == enterprise_id)
         .order_by(OpportunityExperienceWeightPolicy.version.desc())
@@ -64,7 +63,7 @@ def ensure_default_opportunity_weight_policy(
     if latest is not None:
         latest.is_active = True
         latest.activated_at = datetime.now(UTC)
-        db.flush()
+        await db.flush()
         return latest
 
     policy = OpportunityExperienceWeightPolicy(
@@ -80,5 +79,5 @@ def ensure_default_opportunity_weight_policy(
         notes="固定初始口径：高20%、中10%、低5%；不代表真实赢单概率。",
     )
     db.add(policy)
-    db.flush()
+    await db.flush()
     return policy
