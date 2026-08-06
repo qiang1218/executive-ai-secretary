@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, aliased
 from services.capabilities import CapabilityClaims, CapabilityError
 from configs.settings import get_settings
 from services.data_freshness import effective_domain_status
-from worker.mcp_registry import effective_tool, registered_spec
+from worker_old.mcp_registry import effective_tool, registered_spec
 from models import (
     DailySnapshot,
     DataDomainStatus,

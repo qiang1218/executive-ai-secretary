@@ -28,7 +28,7 @@ from schemas import (
 )
 from services.authz import Principal
 from starlette.concurrency import run_in_threadpool
-from worker.mcp_registry import (
+from worker_old.mcp_registry import (
     MCP_TOOL_SPECS,
     effective_catalog,
     registered_spec,

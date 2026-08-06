@@ -17,7 +17,11 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+# alembic 使用同步引擎，需要将 asyncpg 驱动转为 psycopg
+_sync_url = settings.database_url.replace(
+    "postgresql+asyncpg://", "postgresql+psycopg://", 1
+)
+config.set_main_option("sqlalchemy.url", _sync_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 

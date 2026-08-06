@@ -46,7 +46,7 @@ from services.model_authorization import (
     model_authorization,
     model_catalog_item,
 )
-from worker.hermes_client import HermesRuntimeError, test_anspire_provider
+from worker_old.hermes_client import HermesRuntimeError, test_anspire_provider
 from schemas import (
     AdminModelAuthorizationOut,
     AdminModelCatalogOut,

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions.errors import AppError
-from worker.mcp_registry import MCP_TOOL_SPECS
+from worker_old.mcp_registry import MCP_TOOL_SPECS
 from models import HarnessConfigVersion
 from core.security import utc_now
 

@@ -8,10 +8,6 @@ from pathlib import Path
 from services.backup_evidence import verify_backup_evidence
 from configs.settings import get_settings
 from db.session import SessionLocal
-from worker.integration_key_rotation import (
-    rotate_integration_keys,
-    verify_integration_key_version,
-)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from worker_old.integration_key_rotation import (  # noqa: delayed import
+        rotate_integration_keys,
+        verify_integration_key_version,
+    )
+
     args = build_parser().parse_args()
     settings = get_settings()
     if args.to_version != settings.integration_encryption_key_version:

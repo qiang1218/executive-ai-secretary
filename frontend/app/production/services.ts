@@ -176,11 +176,64 @@ export function createProductionServices(client: ApiClient = apiClient) {
       content: string,
       organizationScope: OrganizationScope,
       modelId: string,
-    ) {
+    ): Promise<ConversationMessage> {
       return client.request<ConversationMessage>(
         `/conversations/${encodeURIComponent(id)}/messages`,
         { method: "POST", headers: idempotencyHeaders(), body: { content, file_ids: [], organization_scope: organizationScope, model_id: modelId } },
       );
+    },
+    /**
+     * 流式发送消息。返回一个 async generator，逐块产出 SSE 事件。
+     *
+     * 事件类型：
+     *   { type: "delta", content: string }
+     *   { type: "done", message_id: string, content: string }
+     *   { type: "error", error: string }
+     */
+    async *sendMessageStream(
+      id: string,
+      content: string,
+      organizationScope: OrganizationScope,
+      modelId: string,
+    ): AsyncGenerator<{ type: string; content?: string; message_id?: string; error?: string }> {
+      // 从 cookie 读取 CSRF token（与 ApiClient.request 逻辑一致）
+      const csrfCookie = document.cookie
+        .split(";")
+        .map((v) => v.trim())
+        .find((v) => v.startsWith("exec_csrf="));
+      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.slice("exec_csrf=".length)) : "";
+      const response = await fetch(`${client.baseUrl}/conversations/${encodeURIComponent(id)}/messages`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+          ...idempotencyHeaders(),
+        },
+        body: JSON.stringify({ content, file_ids: [], organization_scope: organizationScope, model_id: modelId }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("no response body");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            yield JSON.parse(line.slice(6));
+          } catch {
+            // skip malformed line
+          }
+        }
+      }
     },
     async evidence(id: string, messageId: string) {
       return client.request<MessageEvidence[]>(

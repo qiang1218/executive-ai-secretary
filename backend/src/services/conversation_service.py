@@ -39,6 +39,7 @@ from models import (
 from repositories import conversation as conversation_repo
 from repositories import job as job_repo
 from repositories import message as message_repo
+from repositories import model_provider_config as model_config_repo
 from repositories import project as project_repo
 from repositories.audit import record_audit
 from schemas import (
@@ -79,6 +80,15 @@ class ConversationService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        # settings 延迟初始化，避免循环导入
+        self._settings: "Settings | None" = None
+
+    def _get_settings(self) -> "Settings":
+        if self._settings is None:
+            from configs.settings import get_settings
+
+            self._settings = get_settings()
+        return self._settings
 
     # ------------------------------------------------------------------ utils
 
@@ -615,6 +625,187 @@ class ConversationService:
         await self._session.execute(text("NOTIFY new_job"))
         await self._session.commit()
         return output
+
+    async def prepare_message(
+        self,
+        conversation_id: uuid.UUID,
+        payload: MessageCreate,
+        request: Request,
+        principal: Principal,
+    ) -> tuple[Message, list[Message], Conversation, dict[str, str]]:
+        """创建 user message，返回 (user_msg, context_messages, conversation, llm_config)。
+
+        context_messages 包含历史消息 + 新 user message，供 worker 作为完整
+        上下文使用。复用 ``create_message`` 的前半段校验与 user message 创建
+        逻辑，但不创建 assistant placeholder、不创建 Job、不 NOTIFY。
+
+        llm_config 从数据库 ModelProviderConfig 读取，包含：
+          base_url, api_key (已解密), provider, api_mode, model
+
+        注意：流式接口不适合幂等，因此不调用 ``replay``/``save_response``。
+        """
+        conversation = await self._owned_conversation(
+            principal, conversation_id, lock=True
+        )
+        if conversation.archived_at:
+            raise AppError(409, "conversation_archived", "已归档会话不能继续发送消息")
+        if payload.file_ids:
+            raise AppError(410, "file_upload_disabled", "当前阶段不支持在会话中使用文件")
+        current_scope = await persisted_scope(self._session, conversation)
+        requested_scope = payload.organization_scope or current_scope
+        normalized_scope, resolved_scope_ids = await normalize_scope(
+            self._session, principal, requested_scope
+        )
+        requested_model_id = await resolve_authorized_model(
+            self._session,
+            principal.enterprise_id,
+            payload.model_id or conversation.selected_model_id,
+        )
+        conversation.selected_model_id = requested_model_id
+        sequence = (
+            await self._session.scalar(
+                select(func.coalesce(func.max(Message.sequence), 0)).where(
+                    Message.conversation_id == conversation.id
+                )
+            )
+            or 0
+        ) + 1
+        if scope_changed(current_scope, normalized_scope):
+            scope_event = Message(
+                conversation_id=conversation.id,
+                role="system",
+                content=(
+                    "查询范围已更新为全部授权事业部"
+                    if normalized_scope.mode == "all_authorized"
+                    else f"查询范围已更新为 {len(resolved_scope_ids)} 个事业部"
+                ),
+                content_json={
+                    "event": "organization_scope_changed",
+                    "organization_scope": normalized_scope.model_dump(mode="json"),
+                    "resolved_organization_unit_ids": [
+                        str(item) for item in resolved_scope_ids
+                    ],
+                },
+                sequence=sequence,
+                status="completed",
+            )
+            self._session.add(scope_event)
+            sequence += 1
+            await set_conversation_scope(self._session, conversation, normalized_scope)
+        message_scope_snapshot = scope_snapshot(normalized_scope, resolved_scope_ids)
+        message = Message(
+            conversation_id=conversation.id,
+            author_user_id=principal.user.id,
+            role="user",
+            content=payload.content,
+            content_json={"organization_scope_snapshot": message_scope_snapshot},
+            requested_model_id=requested_model_id,
+            sequence=sequence,
+            status="completed",
+        )
+        self._session.add(message)
+        conversation.last_message_at = utc_now()
+        await self._session.flush()
+        await record_audit(
+            self._session,
+            request,
+            "message.created",
+            actor=principal.user,
+            session=principal.session,
+            target_type="message",
+            target_id=message.id,
+            metadata={
+                "conversation_id": str(conversation.id),
+                "scope_mode": normalized_scope.mode,
+                "scope_count": len(resolved_scope_ids),
+                "model_id": requested_model_id,
+            },
+        )
+        await self._session.commit()
+        # 重新加载以便拿到已 commit 的 message 和 conversation 状态
+        await self._session.refresh(message)
+        # 取最近 N 条历史消息（含刚创建的 user message），按 sequence 升序
+        history_rows = await message_repo.list_by_conversation(
+            self._session,
+            conversation.id,
+            after_sequence=0,
+            limit=200,
+        )
+        context_messages = [row for row in history_rows if row.sequence <= message.sequence]
+
+        # 从数据库读取企业 LLM 配置（解密 api_key）
+        from services.anspire import decrypt_anspire_api_key
+
+        provider_config = await model_config_repo.find_active(
+            self._session, principal.enterprise_id
+        )
+        if provider_config is None:
+            raise AppError(400, "llm_not_configured", "尚未配置 LLM 服务")
+        llm_config: dict[str, str] = {
+            "base_url": provider_config.endpoint_url,
+            "api_key": decrypt_anspire_api_key(provider_config, self._get_settings())
+            if provider_config.api_key_ciphertext
+            else "",
+            "provider": provider_config.provider,
+            "api_mode": "chat_completions",
+            "model": provider_config.model_id,
+        }
+        return message, context_messages, conversation, llm_config
+
+    async def save_assistant_message(
+        self,
+        conversation_id: uuid.UUID,
+        content: str,
+        request: Request,
+        principal: Principal,
+    ) -> Message:
+        """流结束后保存 assistant message（一次落库）。
+
+        - 计算 sequence（接在最新消息之后）
+        - 创建 assistant message（status=completed）
+        - 更新 conversation.last_message_at
+        - record_audit
+        """
+        conversation = await self._owned_conversation(
+            principal, conversation_id, lock=True
+        )
+        sequence = (
+            await self._session.scalar(
+                select(func.coalesce(func.max(Message.sequence), 0)).where(
+                    Message.conversation_id == conversation.id
+                )
+            )
+            or 0
+        ) + 1
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=content,
+            content_json={},
+            requested_model_id=conversation.selected_model_id,
+            sequence=sequence,
+            status="completed",
+        )
+        self._session.add(assistant_message)
+        conversation.last_message_at = utc_now()
+        await self._session.flush()
+        await record_audit(
+            self._session,
+            request,
+            "message.created",
+            actor=principal.user,
+            session=principal.session,
+            target_type="message",
+            target_id=assistant_message.id,
+            metadata={
+                "conversation_id": str(conversation.id),
+                "role": "assistant",
+                "model_id": conversation.selected_model_id,
+            },
+        )
+        await self._session.commit()
+        await self._session.refresh(assistant_message)
+        return assistant_message
 
     async def resolve_clarification(
         self,

@@ -151,6 +151,26 @@ class Settings(BaseSettings):
     # 否则 worker claim 了 job 会被 runtime 侧 Semaphore 挡住。
     worker_concurrency: int = Field(default=2, ge=1, le=32)
 
+    # ── Hermes Worker（新架构）──
+    worker_host: str = "0.0.0.0"
+    worker_port: int = Field(default=8001, ge=1, le=65535)
+    worker_base_url: str = "http://127.0.0.1:8001"  # API 侧连接 worker 的地址
+    hermes_api_key: SecretStr | None = None  # worker 鉴权用
+    hermes_max_concurrent_runs: int = Field(default=2, ge=1, le=32)
+    hermes_model_default: str = "qwen3.5-plus"
+    hermes_max_iterations: int = Field(default=10, ge=1, le=50)
+    hermes_max_tokens: int | None = None
+
+    @field_validator("hermes_max_tokens", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v):
+        if v in ("", None):
+            return None
+        return v
+
+    # run_agent 包安装路径（AIAgent 来源）
+    # 无需配置，import run_agent 即可
+
     @field_validator("allowed_origins", "trusted_hosts", "worker_job_types", mode="before")
     @classmethod
     def split_csv(cls, value: object) -> object:

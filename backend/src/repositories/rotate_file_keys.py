@@ -8,7 +8,6 @@ from pathlib import Path
 from services.backup_evidence import verify_backup_evidence
 from configs.settings import get_settings
 from db.session import SessionLocal
-from worker.file_key_rotation import rotate_file_keys, verify_file_key_version
 from services.storage import LocalEncryptedStorage
 
 
@@ -28,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from worker_old.file_key_rotation import (  # noqa: delayed import
+        rotate_file_keys,
+        verify_file_key_version,
+    )
+
     args = build_parser().parse_args()
     settings = get_settings()
     if args.to_version != settings.file_encryption_key_version:

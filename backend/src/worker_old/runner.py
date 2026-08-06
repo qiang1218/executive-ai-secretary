@@ -46,11 +46,11 @@ from services.job_state import (
     close_assistant_placeholder,
 )
 
-from worker.assistant_orchestrator import (
+from worker_old.assistant_orchestrator import (
     OrchestrationPermanentError,
     run_assistant_job,
 )
-from worker.file_extraction import (
+from worker_old.file_extraction import (
     FileExtractionPermanentError,
     run_file_extract_job,
 )

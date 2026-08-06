@@ -58,8 +58,8 @@ from services.harness_config import (
     validate_harness_config,
 )
 from services.query_spec import normalize_query_spec
-from worker.hermes_client import HermesRuntimeError, parse_json_response, run_hermes
-from worker.mcp_registry import effective_catalog
+from worker_old.hermes_client import HermesRuntimeError, parse_json_response, run_hermes
+from worker_old.mcp_registry import effective_catalog
 
 
 def _p95(values: list[int]) -> int:

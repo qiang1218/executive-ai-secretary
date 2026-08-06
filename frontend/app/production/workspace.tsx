@@ -201,27 +201,9 @@ export function ProductionWorkspace({
 
   useEffect(() => {
     if (!activeConversationId) return;
-    const source = new EventSource(
-      productionServices.conversations.streamUrl(activeConversationId, 0),
-      { withCredentials: true },
-    );
-    source.addEventListener("message", (event) => {
-      try {
-        const message = JSON.parse((event as MessageEvent<string>).data) as ConversationMessage;
-        setMessages((current) => {
-          const existingIndex = current.findIndex((item) => item.id === message.id);
-          if (existingIndex < 0) {
-            return [...current, message].sort((first, second) => first.sequence - second.sequence);
-          }
-          const next = [...current];
-          next[existingIndex] = message;
-          return next;
-        });
-      } catch {
-        // A malformed event is ignored; EventSource remains connected for the next update.
-      }
-    });
-    return () => source.close();
+    // 不再使用 EventSource 轮询；消息通过 sendMessageStream 的 SSE 流实时获取。
+    // 这里仅做一次初始消息加载（如果有需要）。
+    return () => {};
   }, [activeConversationId]);
 
   useEffect(() => {
@@ -383,7 +365,8 @@ export function ProductionWorkspace({
     setSending(true);
     await runRequest(async () => {
       let conversationId = activeConversationId;
-      if (!conversationId) {
+      const isNewConversation = !conversationId;
+      if (isNewConversation) {
         const createdConversation = await productionServices.conversations.create({
           title: content.slice(0, 42),
           organization_scope: selectedOrganizationScope,
@@ -403,17 +386,106 @@ export function ProductionWorkspace({
           }));
         }
       }
-      const message = await productionServices.conversations.sendMessage(
-        conversationId,
+      // 创建 user message 占位（乐观更新）
+      const tempUserMsg: ConversationMessage = {
+        id: `temp-user-${Date.now()}`,
+        conversation_id: conversationId,
+        role: "user",
         content,
-        selectedOrganizationScope,
-        selectedModelId,
-      );
-      setMessages((current) => [...current, message]);
+        sequence: messages.length + 1,
+        status: "completed",
+        created_at: new Date().toISOString(),
+        evidence: [],
+        jobs: [],
+      } as unknown as ConversationMessage;
+      setMessages((current) => [...current, tempUserMsg]);
+
+      // 创建 assistant 占位（流式填充）
+      const tempAssistantId = `temp-assistant-${Date.now()}`;
+      const tempAssistantMsg: ConversationMessage = {
+        id: tempAssistantId,
+        conversation_id: conversationId,
+        role: "assistant",
+        content: "",
+        sequence: messages.length + 2,
+        status: "running",
+        created_at: new Date().toISOString(),
+        evidence: [],
+        jobs: [],
+      } as unknown as ConversationMessage;
+      setMessages((current) => [...current, tempAssistantMsg]);
+
       setDraft("");
+
+      // 流式接收响应
+      let fullContent = "";
+      try {
+        for await (const event of productionServices.conversations.sendMessageStream(
+          conversationId,
+          content,
+          selectedOrganizationScope,
+          selectedModelId,
+        )) {
+          if (event.type === "delta" && event.content) {
+            fullContent += event.content;
+            setMessages((current) => {
+              const idx = current.findIndex((m) => m.id === tempAssistantId);
+              if (idx < 0) return current;
+              const next = [...current];
+              next[idx] = { ...next[idx], content: fullContent };
+              return next;
+            });
+          } else if (event.type === "done") {
+            // 用真实 message 替换占位
+            const realContent = event.content ?? fullContent;
+            setMessages((current) => {
+              const idx = current.findIndex((m) => m.id === tempAssistantId);
+              if (idx < 0) return current;
+              const next = [...current];
+              next[idx] = {
+                ...next[idx],
+                id: event.message_id ?? tempAssistantId,
+                content: realContent,
+                status: "completed",
+              };
+              return next;
+            });
+            // 同时更新 user message 占位为真实 ID（如果有）
+            fullContent = realContent;
+          } else if (event.type === "error") {
+            setMessages((current) => {
+              const idx = current.findIndex((m) => m.id === tempAssistantId);
+              if (idx < 0) return current;
+              const next = [...current];
+              next[idx] = {
+                ...next[idx],
+                content: event.error ? `回答失败：${event.error}` : "回答失败，请重试。",
+                status: "failed",
+              };
+              return next;
+            });
+          }
+        }
+      } catch (err) {
+        setMessages((current) => {
+          const idx = current.findIndex((m) => m.id === tempAssistantId);
+          if (idx < 0) return current;
+          const next = [...current];
+          next[idx] = {
+            ...next[idx],
+            content: "网络异常，请重试。",
+            status: "failed",
+          };
+          return next;
+        });
+      }
+
       window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversationId)}`);
-      // 消息更新由 SSE 流（conversation stream）异步驱动，无需在此同步轮询阻塞输入框。
-      await refreshWorkspace();
+      // 仅在新会话创建时刷新一次（更新 sidebar 的会话列表/时间戳），
+      // 已有会话的 SSE 流已实时更新消息，无需重载整个 bootstrap。
+      if (isNewConversation) {
+        await refreshWorkspace();
+      }
     });
     setSending(false);
   }

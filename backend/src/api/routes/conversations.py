@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
-from typing import Annotated, Literal
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import ConversationServiceDep, ExecutivePrincipalDep
-from db.session import AsyncSessionLocal, get_db_async
+from api.deps import (
+    ConversationServiceDep,
+    ExecutivePrincipalDep,
+    HermesClientDep,
+)
 from schemas import (
     ClarificationOut,
     ClarificationResolve,
@@ -155,91 +156,6 @@ async def get_message(
     return await service.get_message(principal, conversation_id, message_id)
 
 
-@router.get("/{conversation_id}/stream")
-async def stream_conversation(
-    conversation_id: uuid.UUID,
-    request: Request,
-    principal: ExecutivePrincipalDep,
-    db: Annotated[AsyncSession, Depends(get_db_async)],
-    after_sequence: int = Query(default=0, ge=0),
-    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-) -> StreamingResponse:
-    # Initial ownership check on the request-scoped session; the long-lived
-    # polling loop below uses its own ``AsyncSessionLocal()`` sessions.
-    await ConversationService(db)._owned_conversation(principal, conversation_id)
-    resume_sequence = 0
-    resume_updated_ms = 0
-    try:
-        if last_event_id and ":" in last_event_id:
-            resume_sequence_text, resume_updated_text = last_event_id.split(":", 1)
-            resume_sequence = int(resume_sequence_text)
-            resume_updated_ms = int(resume_updated_text)
-        elif last_event_id:
-            resume_sequence = int(last_event_id)
-    except ValueError:
-        resume_sequence = 0
-        resume_updated_ms = 0
-    cursor = max(after_sequence, resume_sequence)
-    enterprise_id = principal.enterprise_id
-    owner_user_id = principal.user.id
-
-    async def events():
-        nonlocal cursor
-        seen_updates: dict[uuid.UUID, str] = {}
-        idle_cycles = 0
-        while not await request.is_disconnected():
-            async with AsyncSessionLocal() as stream_db:
-                conversation, rows = await ConversationService.fetch_stream_batch(
-                    stream_db,
-                    conversation_id,
-                    enterprise_id,
-                    owner_user_id,
-                    cursor=cursor,
-                )
-                if conversation is None:
-                    yield 'event: error\ndata: {"code":"conversation_not_found"}\n\n'
-                    return
-                emitted = False
-                for item in rows:
-                    updated_marker = item.updated_at.isoformat()
-                    updated_ms = int(item.updated_at.timestamp() * 1000)
-                    is_resumed_item = (
-                        item.sequence == resume_sequence
-                        and updated_ms <= resume_updated_ms
-                    )
-                    if (
-                        item.sequence < cursor
-                        or is_resumed_item
-                        or seen_updates.get(item.id) == updated_marker
-                    ):
-                        continue
-                    seen_updates[item.id] = updated_marker
-                    cursor = item.sequence
-                    emitted = True
-                    payload = MessageOut.model_validate(item).model_dump(mode="json")
-                    yield (
-                        f"id: {cursor}:{updated_ms}\nevent: message\ndata: "
-                        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-                        + "\n\n"
-                    )
-            if emitted:
-                idle_cycles = 0
-            else:
-                idle_cycles += 1
-                if idle_cycles % 20 == 0:
-                    yield "event: heartbeat\ndata: {}\n\n"
-            await asyncio.sleep(0.5)
-
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.post(
     "/{conversation_id}/clarifications/{clarification_id}",
     response_model=ClarificationOut,
@@ -272,8 +188,7 @@ async def get_message_evidence(
 
 @router.post(
     "/{conversation_id}/messages",
-    response_model=MessageOut,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=status.HTTP_200_OK,
 )
 async def create_message(
     conversation_id: uuid.UUID,
@@ -281,11 +196,80 @@ async def create_message(
     request: Request,
     principal: ExecutivePrincipalDep,
     service: ConversationServiceDep,
-):
-    result = await service.create_message(conversation_id, payload, request, principal)
-    if isinstance(result, tuple):
-        return JSONResponse(status_code=result[0], content=result[1])
-    return result
+    hermes_client: HermesClientDep,
+) -> StreamingResponse:
+    # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置
+    user_msg, context_messages, conv, llm_config = await service.prepare_message(
+        conversation_id, payload, request, principal
+    )
+
+    # 2. 构造 worker 请求
+    messages_for_worker = [
+        {"role": m.role, "content": m.content} for m in context_messages
+    ]
+
+    # 3. 返回 SSE 流
+    async def event_stream():
+        full_content: list[str] = []
+        try:
+            async for event in hermes_client.stream_chat(
+                conversation_id=str(conversation_id),
+                messages=messages_for_worker,
+                base_url=llm_config["base_url"],
+                api_key=llm_config["api_key"],
+                provider=llm_config.get("provider", "openai"),
+                api_mode=llm_config.get("api_mode", "chat_completions"),
+                model=llm_config["model"],
+            ):
+                if event.type == "delta":
+                    full_content.append(event.content)
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {"type": "delta", "content": event.content},
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                elif event.type == "done":
+                    # 写 assistant message（一次落库）
+                    content = event.content or "".join(full_content)
+                    assistant_msg = await service.save_assistant_message(
+                        conversation_id, content, request, principal
+                    )
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "done",
+                                "message_id": str(assistant_msg.id),
+                                "content": content,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                elif event.type == "error":
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {"type": "error", "error": event.error},
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+        except Exception as e:
+            yield (
+                "data: "
+                + json.dumps({"type": "error", "error": str(e)}, ensure_ascii=False)
+                + "\n\n"
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post(

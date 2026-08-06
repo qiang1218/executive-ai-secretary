@@ -32,6 +32,7 @@ from services.job_management_service import JobManagementService
 from services.mcp_tool_service import McpToolService
 from services.memory_service import MemoryService
 from services.model_admin_service import ModelAdminService
+from services.hermes_client import HermesClient
 from services.organization_service import OrganizationService
 from services.project_service import ProjectService
 from services.report_service import ReportService
@@ -226,6 +227,14 @@ async def get_health_service(
 HealthServiceDep = Annotated[HealthService, Depends(get_health_service)]
 
 
+async def get_hermes_client(settings: SettingsDep) -> HermesClient:
+    """FastAPI dependency: instantiate ``HermesClient`` with the request settings."""
+    return HermesClient(settings)
+
+
+HermesClientDep = Annotated[HermesClient, Depends(get_hermes_client)]
+
+
 __all__ = [
     "AsyncSessionDep",
     "SettingsDep",
@@ -249,6 +258,7 @@ __all__ = [
     "ModelAdminServiceDep",
     "HarnessAdminServiceDep",
     "HealthServiceDep",
+    "HermesClientDep",
     "AuditService",
     "AuthService",
     "DailyBriefService",
@@ -266,6 +276,7 @@ __all__ = [
     "ModelAdminService",
     "HarnessAdminService",
     "HealthService",
+    "HermesClient",
     "Principal",
     "get_current_principal",
     "get_executive_principal",
@@ -287,6 +298,7 @@ __all__ = [
     "get_model_admin_service",
     "get_harness_admin_service",
     "get_health_service",
+    "get_hermes_client",
     "get_db_async",
     "get_settings",
     "Settings",
