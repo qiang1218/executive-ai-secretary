@@ -1,13 +1,18 @@
-"""AIAgent 封装层：同步 -> 异步桥接 + 流式回调。
+"""AIAgent 封装层：同步 -> 异步桥接 + 流式回调 + MCP 注册。
 
 AIAgent 的 ``chat()`` 是同步阻塞方法，``stream_callback`` 是 ``chat()`` 的方法参数
 （不是构造参数）。``tool_start_callback`` / ``tool_complete_callback`` 才是构造参数。
 本模块通过 ``asyncio.Queue`` + ``run_in_executor`` 把它桥接到异步流式接口。
+
+MCP 工具通过 ``register_mcp_servers()`` 注册，AIAgent 在 tool calling 时
+会自动调用 ``worker.mcp_server`` 的 3 个工具（discover_schema / query_schema / execute_query）。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sys
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
@@ -16,6 +21,37 @@ from run_agent import AIAgent
 from worker.session_store import session_store
 
 logger = logging.getLogger(__name__)
+
+# ── MCP 注册（模块级，仅首次 import 时执行一次）────────────
+_mcp_registered = False
+
+
+def _ensure_mcp_registered() -> None:
+    """确保 MCP server 已注册给 AIAgent（幂等）。
+
+    使用 ``register_mcp_servers`` 注册 ``worker.mcp_server`` 作为
+    AIAgent 的 MCP 工具提供方。注册后 AIAgent 在 tool calling 时
+    可以自动发现和查询数据表。
+    """
+    global _mcp_registered
+    if _mcp_registered:
+        return
+    try:
+        from tools.mcp_tool import register_mcp_servers
+
+        register_mcp_servers({
+            "executive-data": {
+                "command": sys.executable,
+                "args": ["-m", "worker.mcp_server"],
+                "env": {"DATABASE_URL": os.environ.get("DATABASE_URL", "")},
+                "timeout": 30,
+                "connect_timeout": 10,
+            }
+        })
+        _mcp_registered = True
+        logger.info("mcp_server_registered name=executive-data")
+    except Exception:
+        logger.exception("mcp_server_register_failed")
 
 
 @dataclass
@@ -62,6 +98,8 @@ class AgentRunner:
         每次 ``chat`` 都会基于 ``conversation_id`` 复用或新建 hermes
         session_id，从而保持 hermes 侧上下文连续。
         """
+        _ensure_mcp_registered()
+
         hermes_session_id = session_store.get_or_create(conversation_id)
 
         loop = asyncio.get_running_loop()

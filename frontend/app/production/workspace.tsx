@@ -419,9 +419,10 @@ export function ProductionWorkspace({
 
       // 流式接收响应
       let fullContent = "";
+      const toolSteps: { name: string; status: "running" | "done"; result?: string }[] = [];
       try {
         for await (const event of productionServices.conversations.sendMessageStream(
-          conversationId,
+          conversationId!,
           content,
           selectedOrganizationScope,
           selectedModelId,
@@ -432,7 +433,29 @@ export function ProductionWorkspace({
               const idx = current.findIndex((m) => m.id === tempAssistantId);
               if (idx < 0) return current;
               const next = [...current];
-              next[idx] = { ...next[idx], content: fullContent };
+              next[idx] = { ...next[idx], content: fullContent, tool_steps: [...toolSteps] };
+              return next;
+            });
+          } else if (event.type === "tool_start") {
+            toolSteps.push({ name: event.tool ?? "工具调用", status: "running" });
+            setMessages((current) => {
+              const idx = current.findIndex((m) => m.id === tempAssistantId);
+              if (idx < 0) return current;
+              const next = [...current];
+              next[idx] = { ...next[idx], tool_steps: [...toolSteps] };
+              return next;
+            });
+          } else if (event.type === "tool_complete") {
+            const step = toolSteps.find((s) => s.name === event.tool && s.status === "running");
+            if (step) {
+              step.status = "done";
+              step.result = typeof event.result === "string" ? event.result : JSON.stringify(event.result);
+            }
+            setMessages((current) => {
+              const idx = current.findIndex((m) => m.id === tempAssistantId);
+              if (idx < 0) return current;
+              const next = [...current];
+              next[idx] = { ...next[idx], tool_steps: [...toolSteps] };
               return next;
             });
           } else if (event.type === "done") {
@@ -447,6 +470,7 @@ export function ProductionWorkspace({
                 id: event.message_id ?? tempAssistantId,
                 content: realContent,
                 status: "completed",
+                tool_steps: [...toolSteps],
               };
               return next;
             });
@@ -480,7 +504,7 @@ export function ProductionWorkspace({
         });
       }
 
-      window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversationId)}`);
+      window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversationId!)}`);
       // 仅在新会话创建时刷新一次（更新 sidebar 的会话列表/时间戳），
       // 已有会话的 SSE 流已实时更新消息，无需重载整个 bootstrap。
       if (isNewConversation) {

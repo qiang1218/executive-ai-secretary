@@ -16,6 +16,7 @@ from .file import *  # noqa: F401,F403
 from .harness import *  # noqa: F401,F403
 from .job import *  # noqa: F401,F403
 from .mcp import *  # noqa: F401,F403
+from .mcp_schema import *  # noqa: F401,F403
 from .model_provider import *  # noqa: F401,F403
 from .organization import *  # noqa: F401,F403
 from .project import *  # noqa: F401,F403
@@ -74,6 +75,11 @@ __all__ = [
     "HarnessTraceOut",
     "JobCreate",
     "JobOut",
+    "McpColumnSchema",
+    "McpSchemaOut",
+    "McpSchemaCatalogOut",
+    "McpSchemaUpdate",
+    "McpSchemaRefreshOut",
     "McpToolOut",
     "McpToolCatalogOut",
     "McpToolUpdate",

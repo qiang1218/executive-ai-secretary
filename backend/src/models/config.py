@@ -178,6 +178,41 @@ class HarnessConfigVersion(UUIDMixin, TimestampMixin, Base):
     )
 
 
+class McpSchemaRegistry(UUIDMixin, TimestampMixin, Base):
+    """企业级数据表 schema 注册 — MCP v2 通用 3 步模式。
+
+    替代旧 ``McpToolConfig`` / ``McpToolDefinition`` 的 case-by-case 方式。
+    管理端控制哪些表对 Agent 可见，Worker 侧的 MCP server 从本表读取
+    schema 元数据供 Agent 自动发现和查询。
+    """
+
+    __tablename__ = "mcp_schema_registry"
+    __table_args__ = (
+        UniqueConstraint("enterprise_id", "table_name",
+                         name="uq_mcp_schema_enterprise_table"),
+        Index("ix_mcp_schema_enterprise_enabled", "enterprise_id", "is_enabled"),
+        Index("ix_mcp_schema_enterprise_category", "enterprise_id", "category"),
+    )
+
+    enterprise_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    table_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    column_schema: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONType, default=list, nullable=False
+    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_indexed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_rows: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    query_timeout_seconds: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    sample_rows: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class OpportunityExperienceWeightPolicy(UUIDMixin, TimestampMixin, Base):
     """Versioned, auditable experience weights used for pipeline forecasting.
 

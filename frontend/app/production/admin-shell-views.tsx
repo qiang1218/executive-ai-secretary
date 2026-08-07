@@ -6,6 +6,10 @@ import { productionServices } from "./services";
 import type {
   AdminModelAuthorization,
   AdminModelCatalog,
+  McpSchemaCatalog,
+  McpSchemaRecord,
+  McpSchemaUpdate,
+  McpSchemaRefreshOut,
   McpTool,
   McpToolCatalog,
   ModelProviderConfig,
@@ -400,6 +404,388 @@ export function McpToolsPanel() {
         </section>
       </div>
       {createOpen && <div className="mcp-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setCreateOpen(false); }}><section className="mcp-create-dialog" role="dialog" aria-modal="true" aria-labelledby="mcp-create-title"><header><div><small>企业组合工具</small><h2 id="mcp-create-title">新增 MCP 工具</h2><p>组合已有的受审查询能力，不创建新的 SQL 或外部连接。</p></div><button type="button" disabled={Boolean(busy)} onClick={() => setCreateOpen(false)} aria-label="关闭">×</button></header><form onSubmit={createCompositeTool}><div className="mcp-create-grid"><label><span>工具名称</span><input value={createDraft.display_name} maxLength={160} autoFocus onChange={(event) => setCreateDraft((current) => ({ ...current, display_name: event.target.value }))} placeholder="例如：重点客户风险体检" /></label><label><span>工具标识</span><input value={createDraft.tool_name} maxLength={64} spellCheck={false} onChange={(event) => setCreateDraft((current) => ({ ...current, tool_name: event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "" ) }))} /><small>必须以 custom_ 开头，发布后不可修改。</small></label><label><span>业务分类</span><input value={createDraft.category} maxLength={80} onChange={(event) => setCreateDraft((current) => ({ ...current, category: event.target.value }))} /></label><label className="wide"><span>用途说明</span><textarea rows={3} value={createDraft.description} maxLength={2000} onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))} placeholder="说明规划器何时应使用这个工具，以及它能够回答什么问题。" /></label></div><fieldset className="mcp-component-picker"><legend>选择组成工具 <small>{createDraft.component_tools.length} / 4</small></legend><p>执行时会自动合并共同参数、数据时间和数字证据。</p><div>{builtInTools.map((tool) => { const checked = createDraft.component_tools.includes(tool.tool_name); return <label className={checked ? "selected" : ""} key={tool.tool_name}><input type="checkbox" checked={checked} disabled={!checked && createDraft.component_tools.length >= 4} onChange={() => toggleComponent(tool.tool_name)} /><span><strong>{tool.display_name}</strong><small>{tool.category} · {tool.domains.join("、") || "权限范围"}</small></span><i aria-hidden="true">{checked ? "✓" : "+"}</i></label>; })}</div></fieldset><label className="mcp-create-note"><span>运维备注</span><textarea rows={2} value={createDraft.operator_note} maxLength={500} onChange={(event) => setCreateDraft((current) => ({ ...current, operator_note: event.target.value }))} placeholder="仅管理员可见，可留空" /></label>{error && <p className="anspire-error" role="alert">{error}</p>}<footer><p>创建后默认停用。请先校验依赖工具和数据域，再手动启用。</p><div><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setCreateOpen(false)}>取消</button><button className="primary-button" type="submit" disabled={Boolean(busy) || !createDraft.tool_name.match(/^custom_[a-z0-9_]+$/) || !createDraft.display_name.trim() || createDraft.description.trim().length < 12 || !createDraft.category.trim() || createDraft.component_tools.length === 0}>{busy === "create" ? "正在创建…" : "创建工具"}</button></div></footer></form></section></div>}
+    </main>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// MCP v2 Schema 管理面板
+// ══════════════════════════════════════════════════════════
+
+export function McpSchemaPanel() {
+  const [catalog, setCatalog] = useState<McpSchemaCatalog | null>(null);
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState<string | false>(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    productionServices()
+      .then((s) => s.adminMcpSchema.list())
+      .then((data) => { if (!cancelled) setCatalog(data); })
+      .catch((err) => { if (!cancelled) setError(humanizeApiError(err)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!catalog) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return catalog.tables;
+    return catalog.tables.filter(
+      (t) =>
+        t.table_name.toLowerCase().includes(q) ||
+        t.display_name.toLowerCase().includes(q) ||
+        t.category.toLowerCase().includes(q),
+    );
+  }, [catalog, query]);
+
+  const selected = useMemo(() => {
+    if (!selectedTable || !catalog) return null;
+    return catalog.tables.find((t) => t.table_name === selectedTable) ?? null;
+  }, [selectedTable, catalog]);
+
+  async function updateTable(tableName: string, values: McpSchemaUpdate) {
+    setBusy("save");
+    setError("");
+    setNotice("");
+    try {
+      const services = await productionServices();
+      const updated = await services.adminMcpSchema.update(tableName, values);
+      setCatalog((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tables: prev.tables.map((t) =>
+            t.table_name === tableName ? { ...t, ...updated } : t,
+          ),
+        };
+      });
+      setNotice("保存成功");
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshTable(tableName: string) {
+    setBusy("refresh");
+    setError("");
+    setNotice("");
+    try {
+      const services = await productionServices();
+      const result = await services.adminMcpSchema.refresh(tableName);
+      if (result.error) {
+        setError(`刷新失败：${result.error}`);
+      } else {
+        setNotice(`刷新成功，发现 ${result.columns_discovered} 列（v${result.schema_version}）`);
+        // 重新加载 catalog
+        const data = await services.adminMcpSchema.list();
+        setCatalog(data);
+      }
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshAll() {
+    setBusy("refreshAll");
+    setError("");
+    setNotice("");
+    try {
+      const services = await productionServices();
+      const data = await services.adminMcpSchema.refreshAll();
+      setCatalog(data);
+      setNotice(`刷新完成，共 ${data.total} 张表`);
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const categoryLabel: Record<string, string> = {
+    opportunity: "商机",
+    delivery: "交付",
+    collection: "回款",
+    target: "目标",
+    dimension: "维度",
+    snapshot: "快照",
+  };
+
+  return (
+    <main className="production-admin-main mcp-admin-main">
+      <header className="production-admin-heading">
+        <div>
+          <p>数据 Schema</p>
+          <h1>MCP 表结构注册</h1>
+          <span>Agent 通过 discover → query → execute 三步自动查询数据表。</span>
+        </div>
+        <div className="production-admin-heading-actions">
+          <span className="production-admin-status positive">
+            <i aria-hidden="true" />
+            {catalog ? `${catalog.enabled_count} / ${catalog.total} 已启用` : "正在读取"}
+          </span>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy === "refreshAll"}
+            onClick={() => void refreshAll()}
+          >
+            {busy === "refreshAll" ? "正在刷新…" : "刷新所有 Schema"}
+          </button>
+        </div>
+      </header>
+
+      <div className="mcp-registry-layout">
+        {/* ── 左侧：表列表 ── */}
+        <section className="mcp-tool-index" aria-label="数据表列表">
+          <header>
+            <div>
+              <strong>数据表</strong>
+              <small>{catalog ? `${catalog.total} 张表` : "加载中"}</small>
+            </div>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索表名或分类"
+              aria-label="搜索数据表"
+            />
+          </header>
+          <div>
+            {filtered.map((t) => (
+              <article
+                className={selectedTable === t.table_name ? "selected" : ""}
+                key={t.table_name}
+              >
+                <button type="button" onClick={() => setSelectedTable(t.table_name)}>
+                  <span>
+                    <strong>{t.display_name}</strong>
+                    <small>{t.table_name}</small>
+                    <em>{categoryLabel[t.category] ?? t.category}</em>
+                  </span>
+                  <i
+                    className={`mcp-readiness ${t.is_enabled ? "ready" : "disabled"}`}
+                    title={t.is_enabled ? "已启用" : "已停用"}
+                    aria-label={t.is_enabled ? "ready" : "disabled"}
+                  />
+                </button>
+                <label className="switch mcp-inline-switch" title="启用此表">
+                  <input
+                    type="checkbox"
+                    checked={t.is_enabled}
+                    disabled={Boolean(busy)}
+                    onChange={(e) =>
+                      void updateTable(t.table_name, { is_enabled: e.target.checked })
+                    }
+                  />
+                  <span aria-hidden="true" />
+                </label>
+              </article>
+            ))}
+          </div>
+          {!filtered.length && <p className="mcp-empty">没有匹配的表。</p>}
+        </section>
+
+        {/* ── 右侧：表详情 ── */}
+        <section className="mcp-tool-detail" aria-live="polite">
+          {!selected ? (
+            <div className="anspire-loading">请选择一张数据表查看详情。</div>
+          ) : (
+            <>
+              <header>
+                <div>
+                  <small>
+                    {categoryLabel[selected.category] ?? selected.category}
+                    {selected.schema_version > 0 ? ` · v${selected.schema_version}` : ""}
+                  </small>
+                  <h2>{selected.display_name}</h2>
+                  <code>{selected.table_name}</code>
+                </div>
+                <span
+                  className={`mcp-detail-status ${selected.is_enabled ? "ready" : "disabled"}`}
+                >
+                  {selected.is_enabled ? "已启用" : "已停用"}
+                </span>
+              </header>
+
+              <div className="mcp-tool-controls">
+                <label>
+                  <span>Agent 可见</span>
+                  <span className="switch">
+                    <input
+                      type="checkbox"
+                      checked={selected.is_enabled}
+                      disabled={Boolean(busy)}
+                      onChange={(e) =>
+                        void updateTable(selected.table_name, { is_enabled: e.target.checked })
+                      }
+                    />
+                    <span aria-hidden="true" />
+                  </span>
+                  <small>停用后 Agent 无法发现或查询此表。</small>
+                </label>
+              </div>
+
+              <div className="mcp-tool-form">
+                <label>
+                  <span>用途说明</span>
+                  <textarea
+                    rows={3}
+                    value={selected.description}
+                    maxLength={2000}
+                    readOnly
+                  />
+                </label>
+                <label>
+                  <span>最大返回行数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={selected.max_rows}
+                    disabled={Boolean(busy)}
+                    onChange={(e) =>
+                      void updateTable(selected.table_name, {
+                        max_rows: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  <span>查询超时（秒）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={selected.query_timeout_seconds}
+                    disabled={Boolean(busy)}
+                    onChange={(e) =>
+                      void updateTable(selected.table_name, {
+                        query_timeout_seconds: Number(e.target.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+
+              {/* 列结构 */}
+              <section className="mcp-schema">
+                <header>
+                  <strong>列结构</strong>
+                  <small>
+                    {selected.column_schema.length > 0
+                      ? `${selected.column_schema.length} 列`
+                      : "未刷新"}
+                  </small>
+                </header>
+                <div>
+                  {selected.column_schema.length === 0 ? (
+                    <p>尚未刷新 Schema，点击下方按钮从数据库自动发现列结构。</p>
+                  ) : (
+                    selected.column_schema.map((col) => (
+                      <span key={col.name}>
+                        <code>
+                          {col.name}
+                          {col.is_primary_key ? " PK" : ""}
+                        </code>
+                        <small>
+                          {col.type}
+                          {!col.nullable ? " NOT NULL" : ""}
+                          {col.references
+                            ? ` → ${col.references.table}.${col.references.column}`
+                            : ""}
+                          {col.comment ? ` - ${col.comment}` : ""}
+                        </small>
+                      </span>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              {/* 示例数据 */}
+              {selected.sample_rows && selected.sample_rows.length > 0 && (
+                <section className="mcp-schema">
+                  <header>
+                    <strong>示例数据</strong>
+                    <small>前 {selected.sample_rows.length} 行</small>
+                  </header>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr>
+                          {Object.keys(selected.sample_rows[0]).slice(0, 6).map((k) => (
+                            <th
+                              key={k}
+                              style={{
+                                padding: "4px 8px",
+                                textAlign: "left",
+                                borderBottom: "1px solid var(--border)",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {k}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selected.sample_rows.map((row, i) => (
+                          <tr key={i}>
+                            {Object.values(row)
+                              .slice(0, 6)
+                              .map((v, j) => (
+                                <td
+                                  key={j}
+                                  style={{
+                                    padding: "4px 8px",
+                                    borderBottom: "1px solid var(--border-subtle)",
+                                    maxWidth: "200px",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {String(v ?? "NULL")}
+                                </td>
+                              ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+
+              {selected.last_refreshed_at && (
+                <p className="anspire-notice" role="status">
+                  Schema 最后刷新：{new Date(selected.last_refreshed_at).toLocaleString("zh-CN")}
+                </p>
+              )}
+              {error && <p className="anspire-error" role="alert">{error}</p>}
+              {notice && <p className="anspire-notice" role="status">{notice}</p>}
+
+              <footer>
+                <span>刷新会从数据库自动发现最新列结构和示例数据。</span>
+                <div>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={busy === "refresh"}
+                    onClick={() => void refreshTable(selected.table_name)}
+                  >
+                    {busy === "refresh" ? "正在刷新…" : "刷新 Schema"}
+                  </button>
+                </div>
+              </footer>
+            </>
+          )}
+        </section>
+      </div>
     </main>
   );
 }

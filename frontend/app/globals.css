@@ -5913,6 +5913,17 @@ tbody tr:last-child td {
   border-top: 1px solid #dde3dd;
   background: #f7f8f4;
 }
+.workspace-composer-dock > .workbench-composer,
+.workspace-composer-dock > p {
+  width: min(100%, 860px);
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+.workspace-composer-dock > p {
+  margin-top: 6px;
+  margin-bottom: 0;
+}
 
 .workbench-composer {
   width: min(100%, 900px);

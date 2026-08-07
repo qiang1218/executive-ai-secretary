@@ -172,6 +172,12 @@ export type HarnessTrace = {
   shared_content: Record<string, unknown> | null;
 };
 
+export type ToolStep = {
+  name: string;
+  status: "running" | "done";
+  result?: string;
+};
+
 export type ConversationMessage = {
   id: string;
   conversation_id: string;
@@ -188,6 +194,7 @@ export type ConversationMessage = {
   status?: "queued" | "running" | "completed" | "failed";
   request_id?: string | null;
   citations?: Array<{ label: string; source: string; as_of?: string | null }>;
+  tool_steps?: ToolStep[];
 };
 
 export type AuthorizedModel = {
@@ -427,6 +434,62 @@ export type McpToolCatalog = {
   planner_count: number;
   generated_at: string;
 };
+
+// ── MCP v2 Schema 管理 ──────────────────────────────────
+
+export type McpColumnSchema = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  comment: string;
+  is_primary_key: boolean;
+  references: { table: string; column: string } | null;
+};
+
+export type McpSchemaRecord = {
+  id: string;
+  enterprise_id: string;
+  table_name: string;
+  display_name: string;
+  description: string;
+  category: string;
+  column_schema: McpColumnSchema[];
+  is_enabled: boolean;
+  is_indexed: boolean;
+  max_rows: number;
+  query_timeout_seconds: number;
+  sample_rows: Record<string, unknown>[] | null;
+  schema_version: number;
+  last_refreshed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type McpSchemaCatalog = {
+  tables: McpSchemaRecord[];
+  total: number;
+  enabled_count: number;
+  last_refreshed_at: string | null;
+};
+
+export type McpSchemaUpdate = {
+  display_name?: string;
+  description?: string;
+  category?: string;
+  is_enabled?: boolean;
+  max_rows?: number;
+  query_timeout_seconds?: number;
+};
+
+export type McpSchemaRefreshOut = {
+  table_name: string;
+  schema_version: number;
+  columns_discovered: number;
+  refreshed_at: string;
+  error: string | null;
+};
+
+// ─────────────────────────────────────────────────────────
 
 export type DataSource = {
   id: string;

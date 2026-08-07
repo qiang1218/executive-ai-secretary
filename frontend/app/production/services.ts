@@ -27,6 +27,10 @@ import type {
   McpTool,
   McpToolCatalog,
   McpCompositeToolCreate,
+  McpSchemaRecord,
+  McpSchemaCatalog,
+  McpSchemaUpdate,
+  McpSchemaRefreshOut,
   MessageEvidence,
   ModelProviderConfig,
   ModelProviderTest,
@@ -195,7 +199,7 @@ export function createProductionServices(client: ApiClient = apiClient) {
       content: string,
       organizationScope: OrganizationScope,
       modelId: string,
-    ): AsyncGenerator<{ type: string; content?: string; message_id?: string; error?: string }> {
+    ): AsyncGenerator<{ type: string; content?: string; message_id?: string; error?: string; tool?: string; args?: unknown; result?: unknown }> {
       // 从 cookie 读取 CSRF token（与 ApiClient.request 逻辑一致）
       const csrfCookie = document.cookie
         .split(";")
@@ -417,6 +421,36 @@ export function createProductionServices(client: ApiClient = apiClient) {
     },
   };
 
+  // ── MCP v2 Schema 管理 ────────────────────────────────
+  const adminMcpSchema = {
+    async list() {
+      return client.request<McpSchemaCatalog>("/admin/mcp-schemas");
+    },
+    async get(tableName: string) {
+      return client.request<McpSchemaRecord>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}`,
+      );
+    },
+    async update(tableName: string, values: McpSchemaUpdate) {
+      return client.request<McpSchemaRecord>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}`,
+        { method: "PATCH", body: values },
+      );
+    },
+    async refresh(tableName: string) {
+      return client.request<McpSchemaRefreshOut>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}/refresh`,
+        { method: "POST" },
+      );
+    },
+    async refreshAll() {
+      return client.request<McpSchemaCatalog>("/admin/mcp-schemas/refresh-all", {
+        method: "POST",
+      });
+    },
+  };
+  // ───────────────────────────────────────────────────────
+
   const adminData = {
     async overview() {
       return client.request<DataOperationsV3Overview>("/admin/data-operations/overview");
@@ -519,7 +553,7 @@ export function createProductionServices(client: ApiClient = apiClient) {
     },
   };
 
-  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcp, adminData };
+  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcp, adminMcpSchema, adminData };
 }
 
 export type ProductionServices = ReturnType<typeof createProductionServices>;

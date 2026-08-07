@@ -221,6 +221,8 @@ async def create_message(
                 api_mode=llm_config.get("api_mode", "chat_completions"),
                 model=llm_config["model"],
             ):
+
+                print(event)
                 if event.type == "delta":
                     full_content.append(event.content)
                     yield (

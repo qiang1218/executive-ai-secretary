@@ -239,9 +239,19 @@ export function ProductionConversation({
   onCancelAnswer: (messageId: string) => void;
   onRetryAnswer: (messageId: string) => void;
 }) {
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  // messages 变化（流式 delta / tool_start / tool_complete / done）时自动滚到底部
+  useEffect(() => {
+    const node = chatScrollRef.current;
+    if (!node) return;
+    requestAnimationFrame(() => {
+      node.scrollTo({ top: node.scrollHeight, behavior: messages.some((m) => m.status === "running") ? "auto" : "smooth" });
+    });
+  }, [messages]);
+
   return (
     <div className="chat-page production-chat-page">
-      <div className="chat-scroll-region"><div className="chat-scroll-inner"><div className="conversation-column">
+      <div className="chat-scroll-region" ref={chatScrollRef}><div className="chat-scroll-inner"><div className="conversation-column">
         {loading && <MessageSkeleton />}
         {error && <section className="state-card" role="alert"><p className="eyebrow">加载失败</p><h3>暂时无法读取这条会话</h3><p>{error}</p></section>}
         {!loading && !error && !messages.length && <section className="chat-empty-state"><p className="eyebrow">空会话</p><h2>{conversation?.title || "新会话"}</h2><p>这条会话还没有消息，可以从下方输入框开始。</p></section>}
@@ -301,11 +311,29 @@ function AssistantMessageBody({
   onFollowUp: (question: string) => void;
 }) {
   const envelope = parseAssistantOutput(message.content_json?.assistant_output);
+  const toolSteps = message.tool_steps;
   return (
     <>
       {envelope
         ? <AssistantOutputRenderer envelope={envelope} onFollowUp={onFollowUp} />
         : <section className="answer-conclusion"><p>{message.content || "正在等待真实处理结果…"}</p></section>}
+      {toolSteps && toolSteps.length > 0 && (
+        <details className="tool-steps" open={toolSteps.some((s) => s.status === "running")}>
+          <summary className="tool-steps-summary">
+            <span className="tool-steps-icon">{toolSteps.every((s) => s.status === "done") ? "✓" : "⏳"}</span>
+            执行进度（{toolSteps.filter((s) => s.status === "done").length}/{toolSteps.length}）
+          </summary>
+          <ul className="tool-steps-list">
+            {toolSteps.map((step, i) => (
+              <li key={i} className={`tool-step-item ${step.status}`}>
+                <span className="tool-step-status">{step.status === "done" ? "✓" : "⋯"}</span>
+                <span className="tool-step-name">{step.name}</span>
+                {step.result && <span className="tool-step-result">{step.result.slice(0, 120)}</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <MessageDetails
         conversationId={conversationId}
         message={message}

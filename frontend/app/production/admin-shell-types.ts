@@ -1,6 +1,6 @@
 import type { HarnessBusinessConfig } from "./types";
 
-export type AdminView = "models" | "harness" | "mcp" | "data";
+export type AdminView = "models" | "harness" | "mcp" | "mcp_schema" | "data";
 
 export type DataOperationsView = "sources" | "runs" | "schedule" | "quality" | "policy";
 
@@ -26,6 +26,12 @@ export const guideContent: Record<AdminView, { eyebrow: string; title: string; s
     title: "工具是经营数据的唯一执行入口",
     summary: "系统内置工具执行受审查询；企业组合工具只复用这些能力，不接收任意代码。",
     principles: ["新工具默认停用", "校验数据域和依赖后再启用", "历史调用始终保留原工具标识"],
+  },
+  mcp_schema: {
+    eyebrow: "Schema 说明",
+    title: "Agent 自动发现表结构并生成 SQL",
+    summary: "MCP v2：Agent 通过 discover → query → execute 三步自动查询数据，无需预定义工具。",
+    principles: ["新表默认已注册，可按需停用", "刷新 Schema 同步最新列结构", "Agent 只能查启用表，SQL 受限"],
   },
   data: {
     eyebrow: "运营说明",
