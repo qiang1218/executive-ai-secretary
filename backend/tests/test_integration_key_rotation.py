@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skip(
     "Remove this pytestmark once the real implementation lands."
 )
 
-from repositories import rotate_integration_keys as rotation_cli
+from utils import rotate_integration_keys as rotation_cli
 from services.anspire import (
     ANSPIRE_ENDPOINT_URL,
     AnspireConfigurationError,

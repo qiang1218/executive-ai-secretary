@@ -189,8 +189,7 @@ class HermesClient:
     ) -> dict:
         """同步测试 Anspire provider 连通性（直连网关 ``/chat/completions``）。
 
-        Phase 2: 从 ``worker_old.hermes_client.test_anpire_provider`` 物理迁移过来，
-        改由 ``services/`` 这一侧直连，不再依赖 ``hermes-agent`` 子进程。
+        直连网关，不再依赖 ``hermes-agent`` 子进程。
         """
         import time
 

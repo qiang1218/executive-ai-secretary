@@ -14,7 +14,6 @@ from services.anspire import (
     decrypt_anspire_api_key,
     encrypt_anspire_api_key,
 )
-from services.business_tools import execute_business_tool
 from services.capabilities import (
     CapabilityClaims,
     CapabilityError,
@@ -648,6 +647,14 @@ def test_capability_token_is_signed_scoped_and_tamper_evident() -> None:
         verify_capability_token(token[:-1] + ("A" if token[-1] != "A" else "B"), settings)
 
 
+@pytest.mark.skip(
+    reason=(
+        "Phase 4 cleanup: hard-coded business tool handlers "
+        "(get_overall_business / get_target_completion) removed in favor of "
+        "MCP v2 generic tools (discover_schema / query_schema / execute_query). "
+        "Coverage to be re-added under tests/test_admin_mcp_schema.py."
+    )
+)
 def test_business_tool_rejects_cross_scope_before_query() -> None:
     allowed = uuid.uuid4()
     forbidden = uuid.uuid4()
@@ -668,6 +675,13 @@ def test_business_tool_rejects_cross_scope_before_query() -> None:
         )
 
 
+@pytest.mark.skip(
+    reason=(
+        "Phase 4 cleanup: get_target_completion handler removed; "
+        "the equivalent coverage migrates to tests/test_admin_mcp_schema.py "
+        "where the MCP v2 server's execute_query enforces scope."
+    )
+)
 def test_target_completion_reports_domain_not_configured(seeded) -> None:
     _seed_target_completion_facts(seeded)
     claims = _target_claims(seeded, {seeded["east_id"]})
@@ -692,6 +706,12 @@ def test_target_completion_reports_domain_not_configured(seeded) -> None:
     assert result["evidence"][0]["status"] == "not_configured"
 
 
+@pytest.mark.skip(
+    reason=(
+        "Phase 4 cleanup: get_target_completion handler removed; "
+        "MCP v2 server uses execute_query and the new schema registry."
+    )
+)
 def test_target_completion_ignores_stale_target_facts(seeded) -> None:
     _seed_target_completion_facts(seeded)
     claims = _target_claims(seeded, {seeded["east_id"]})
@@ -712,6 +732,13 @@ def test_target_completion_ignores_stale_target_facts(seeded) -> None:
     assert result["data"]["metrics"] == []
 
 
+@pytest.mark.skip(
+    reason=(
+        "Phase 4 cleanup: get_target_completion handler removed; "
+        "MCP v2 server's execute_query enforces organization scope via "
+        "CapabilityClaims — see tests/test_admin_mcp_schema.py."
+    )
+)
 def test_target_completion_preserves_requested_organization_scope(seeded) -> None:
     _seed_target_completion_facts(seeded)
     claims = _target_claims(seeded, {seeded["east_id"], seeded["west_id"]})

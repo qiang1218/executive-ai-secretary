@@ -3,8 +3,8 @@
 worker 现在只做两件事：
 
 1. ``POST /v1/chat/completions`` —— 委托给 ``AgentRunner`` 完成 LLM + tool 调用。
-2. ``POST /v1/profile/run`` —— Phase 2 起取代 ``worker_old.hermes_client.run_hermes`` 的
-   subprocess 路径。worker 直接 ``httpx`` 调 Anspire 网关，使用 ``worker.profile_prompts``
+2. ``POST /v1/profile/run`` —— Phase 2 起取代 ``hermes-agent`` 的 subprocess 路径。
+   worker 直接 ``httpx`` 调 Anspire 网关，使用 ``worker.profile_prompts``
    里物理的 system prompt / 安全内核 / 输出 token 预算。
 
 任何 LLM 凭据都从 API 侧注入（``base_url / api_key / provider / api_mode / model``），
@@ -72,7 +72,7 @@ class ChatRequest(BaseModel):
 
 
 class ProfileRequest(BaseModel):
-    """Phase 2: 替代 ``worker_old.hermes_client.run_hermes`` 的 subprocess 路径。
+    """Phase 2: 取代 ``hermes-agent`` subprocess 路径的 profile 任务端点。
 
     API 侧把"路由 / 改写 / 规划 / 数据回答 / 通用回答"profile 任务通过这个端点
     转发到 worker；worker 自己调用 LLM 并返回文本 + 用量。
@@ -260,9 +260,8 @@ async def profile_run(
     * ``_check_auth`` 同 ``/v1/chat/completions``：如果 Settings.hermes_api_key
       被配置，调用方必须带正确的 Bearer token。
     * ``provider`` 由 API 侧注入；worker 不再读任何环境变量。
-    * 该端点替换 ``worker_old.hermes_runtime.execute_run`` 路径；
-      harness_admin_service.simulate_harness 通过 ``HermesClient.run_profile``
-      调用本端点。
+    * ``harness_admin_service.simulate_harness`` 通过
+      ``HermesClient.run_profile`` 调用本端点。
     """
     _check_auth(authorization)
 

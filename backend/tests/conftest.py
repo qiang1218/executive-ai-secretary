@@ -6,11 +6,19 @@ import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
+# 测试 DB 用临时文件而不是 :memory:。SQLAlchemy 异步引擎走 aiosqlite、同步
+# 引擎走 pysqlite，但两者必须指向同一份数据库文件才能共享 ``Base.metadata``
+# 状态。文件路径在 conftest 模块导入时一次性确定，整个测试会话复用同一个
+# 连接文件 — 各测试间用 ``clean_database`` 重新建表。
+_TEST_DB_PATH = tempfile.NamedTemporaryFile(
+    prefix="executive-ai-testdb-", suffix=".sqlite3", delete=False
+).name
 os.environ.update(
     {
         "APP_ENV": "test",
         "APP_MODE": "demo",
-        "DATABASE_URL": "sqlite+pysqlite:///:memory:",
+        # 同步 + 异步两条链路必须共用一份数据 — 两者指向同一文件（aiosqlite 异步）
+        "DATABASE_URL": f"sqlite+aiosqlite:///{_TEST_DB_PATH}",
         "SESSION_SECRET": "test-session-secret-with-at-least-32-characters",
         "CSRF_SECRET": "test-csrf-secret-with-at-least-32-characters",
         "AUDIT_HMAC_KEY": "test-audit-hmac-key-with-at-least-32-characters",
@@ -193,3 +201,7 @@ def login_and_change_password(client: TestClient, email: str = "executive@exampl
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     get_settings.cache_clear()
     shutil.rmtree(_storage_root, ignore_errors=True)
+    try:
+        os.unlink(_TEST_DB_PATH)
+    except OSError:
+        pass

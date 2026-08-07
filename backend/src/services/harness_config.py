@@ -12,9 +12,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from exceptions.errors import AppError
-from worker_old.mcp_registry import MCP_TOOL_SPECS
 from models import HarnessConfigVersion
 from core.security import utc_now
+
+# MCP v2 通用工具：3 个白名单（discover_schema / query_schema / execute_query）。
+# agent 在 3 步模式下只会用到这三个名字；fast_rules.candidate_tools 必须落在
+# 这套白名单之内，否则 ``validate_harness_config`` 拒绝。
+MCP_V2_TOOLS: frozenset[str] = frozenset(
+    {"discover_schema", "query_schema", "execute_query"}
+)
 
 HARNESS_SCHEMA_VERSION = "3.0"
 PROMPT_KEYS = {
@@ -133,6 +139,37 @@ def _clean_text(value: Any, *, field: str, minimum: int = 1, maximum: int = 1200
     return cleaned
 
 
+def compose_chat_system_prompt(
+    config_json: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """把 ``HarnessConfigVersion.config_json`` 中 ``prompts.system`` 提取出来
+    供 Chat 接口使用。
+
+    返回 ``(system_prompt, harness_version_id_or_literal_default)``。如果传入
+    是空 dict 或无效配置，回退到 ``DEFAULT_HARNESS_CONFIG.prompts.system``
+    并返回 ``"default"`` 作为版本标识（审计用）。任何情况下都返回非空
+    ``system_prompt``—— worker 的 ``profile_prompts.SECURITY_KERNEL`` 由
+    ``AgentRunner`` 自己前置注入，这里只负责"企业层语义"。
+
+    其他 prompt 槽（route / rewrite / plan / data_answer / general_answer）
+    仅供 profile 任务（``POST /v1/profile/run``）使用，与实时 Chat 接口无
+    直接关系，本函数不展开。
+    """
+    fallback = str(DEFAULT_HARNESS_CONFIG.get("prompts", {}).get("system", "")).strip()
+    if not config_json:
+        return fallback or "你是一名企业数据助手。", "default"
+    prompts = config_json.get("prompts") if isinstance(config_json, dict) else None
+    if not isinstance(prompts, dict):
+        return fallback or "你是一名企业数据助手。", "default"
+    raw_system = prompts.get("system")
+    if not isinstance(raw_system, str):
+        return fallback or "你是一名企业数据助手。", "default"
+    cleaned = raw_system.strip()
+    if len(cleaned) < 12:
+        return fallback or "你是一名企业数据助手。", "default"
+    return cleaned, "custom"
+
+
 def validate_harness_config(
     raw: dict[str, Any], *, allowed_tools: set[str] | None = None
 ) -> dict[str, Any]:
@@ -199,7 +236,7 @@ def validate_harness_config(
         candidate_tools = item.get("candidate_tools", [])
         if not isinstance(candidate_tools, list) or len(candidate_tools) > 4:
             raise AppError(422, "invalid_harness_config", "候选 MCP 工具最多 4 个")
-        unknown_tools = set(candidate_tools) - (allowed_tools or set(MCP_TOOL_SPECS))
+        unknown_tools = set(candidate_tools) - set(allowed_tools or MCP_V2_TOOLS)
         if unknown_tools:
             raise AppError(
                 422,

@@ -1,9 +1,8 @@
 """MCP v2 Schema 管理路由。
 
-提供表级 schema 注册的 CRUD + 刷新接口。
-挂载在 ``/admin/mcp-schemas`` 前缀下。
-
-旧 ``/admin/mcp-tools`` 路由（``admin_mcp.py``）保持不变，后续 Phase 4 清理。
+挂载在 ``/admin/mcp-schemas`` 前缀下；v2 用 :class:`mcp_schema_registry` +
+``discover_schema`` / ``query_schema`` / ``execute_query`` 三个通用 MCP 工具
+代替旧版逐 case hardcode handler。
 """
 
 from __future__ import annotations

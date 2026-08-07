@@ -1,29 +1,6 @@
-"""Async job runner — Phase 3 consolidation.
+"""Async job runner (claim / lease / heartbeat / run / finish).
 
-History
-=======
-
-``worker_old/runner.py`` (deleted in Phase 1) held:
-
-* a LISTEN/NOTIFY poll loop claiming queued jobs via ``SELECT ... FOR UPDATE
-  SKIP LOCKED``;
-* per-job-type handlers, including legacy ones feeding ``worker_old``
-  hermes-runtime subprocess paths (``assistant_response``).
-
-Phase 3 keeps the **scheduler skeleton** (claim / lease / heartbeat / run /
-finish) but drops:
-
-* the assistant-response handler — ``conversations`` now streams via
-  ``services.hermes_client.stream_chat``;
-* file-extraction fallback — anything that needs file work is delegated to
-  plain Python jobs;
-* the hermes-agent subprocess dispatcher — data-sync / system.noop go
-  through plain DB calls.
-
-The runner is started **inside the API process** when ``Settings.service_role``
-contains ``api`` (new default). It uses PostgreSQL LISTEN/NOTIFY when
-available; otherwise it falls back to a polling loop that works on
-sqlite (used by tests).
+同进程内跑时优先 PostgreSQL LISTEN/NOTIFY；测试用 sqlite 时退回轮询。
 """
 from __future__ import annotations
 
@@ -86,10 +63,9 @@ async def _handle_file_extract(
 ) -> dict[str, Any]:
     """Phase-3 placeholder.
 
-    The Phase 1 deletion of ``worker_old/file_extraction.py`` removes the
-    only known caller.  This handler is retained so the ``job_type`` enum
-    can still be persisted without exploding the runner.  When a real
-    extractor is reintroduced, replace the body.
+    Retained so the ``job_type`` enum can still be persisted without
+    exploding the runner. When a real extractor is reintroduced, replace
+    the body.
     """
     payload = dict(job.payload_json or {})
     return {

@@ -100,58 +100,6 @@ class EnterpriseModelAuthorization(UUIDMixin, TimestampMixin, Base):
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class McpToolConfig(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "mcp_tool_configs"
-    __table_args__ = (
-        UniqueConstraint("enterprise_id", "tool_name", name="uq_mcp_tool_enterprise_name"),
-        Index("ix_mcp_tool_enterprise_enabled", "enterprise_id", "is_enabled"),
-    )
-
-    enterprise_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    planner_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    timeout_seconds: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
-    max_rows: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
-    operator_note: Mapped[str | None] = mapped_column(String(500))
-    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
-
-
-class McpToolDefinition(UUIDMixin, TimestampMixin, Base):
-    """Enterprise-owned declarative tools composed from audited built-in tools."""
-
-    __tablename__ = "mcp_tool_definitions"
-    __table_args__ = (
-        UniqueConstraint("enterprise_id", "tool_name", name="uq_mcp_definition_enterprise_name"),
-        Index("ix_mcp_definition_enterprise_type", "enterprise_id", "tool_type"),
-    )
-
-    enterprise_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("enterprises.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    category: Mapped[str] = mapped_column(String(80), nullable=False)
-    tool_type: Mapped[str] = mapped_column(String(32), default="composite", nullable=False)
-    component_tools_json: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
-    domains_json: Mapped[list[str]] = mapped_column(JSONType, default=list, nullable=False)
-    parameters_json: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
-    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
-
-
 class HarnessConfigVersion(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "harness_config_versions"
     __table_args__ = (

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -198,19 +199,24 @@ async def create_message(
     service: ConversationServiceDep,
     hermes_client: HermesClientDep,
 ) -> StreamingResponse:
-    # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置
-    user_msg, context_messages, conv, llm_config = await service.prepare_message(
+    # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置 + harness prompt
+    user_msg, context_messages, conv, llm_config, harness_prompt = await service.prepare_message(
         conversation_id, payload, request, principal
     )
+    system_prompt, harness_marker = harness_prompt
 
     # 2. 构造 worker 请求
     messages_for_worker = [
         {"role": m.role, "content": m.content} for m in context_messages
     ]
 
+
     # 3. 返回 SSE 流
     async def event_stream():
         full_content: list[str] = []
+        # 收集一轮 assistant turn 中所有工具调用，供 ``done`` 事件带回给
+        # 前端、并写入 ``content_json``，刷新会话后还能复现 tool 活动。
+        tool_steps: list[dict[str, Any]] = []
         try:
             async for event in hermes_client.stream_chat(
                 conversation_id=str(conversation_id),
@@ -220,9 +226,8 @@ async def create_message(
                 provider=llm_config.get("provider", "openai"),
                 api_mode=llm_config.get("api_mode", "chat_completions"),
                 model=llm_config["model"],
+                system_prompt=system_prompt,
             ):
-
-                print(event)
                 if event.type == "delta":
                     full_content.append(event.content)
                     yield (
@@ -233,11 +238,68 @@ async def create_message(
                         )
                         + "\n\n"
                     )
+                elif event.type == "tool_start":
+                    tool_steps.append(
+                        {
+                            "name": event.tool or "工具调用",
+                            "status": "running",
+                            "args": event.args or {},
+                        }
+                    )
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "tool_start",
+                                "tool": event.tool,
+                                "args": event.args or {},
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                elif event.type == "tool_complete":
+                    step = next(
+                        (
+                            s
+                            for s in tool_steps
+                            if (s.get("name") == event.tool) and s.get("status") == "running"
+                        ),
+                        None,
+                    )
+                    if step is not None:
+                        step["status"] = "done"
+                        if event.result is not None:
+                            step["result"] = (
+                                event.result
+                                if isinstance(event.result, str)
+                                else json.dumps(event.result, ensure_ascii=False)
+                            )
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "tool_complete",
+                                "tool": event.tool,
+                                "result": event.result,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
                 elif event.type == "done":
-                    # 写 assistant message（一次落库）
+                    # 写 assistant message（一次落库）；把本轮 tool_steps 也写进
+                    # ``content_json``，避免刷新会话后丢失工具调用轨迹。
                     content = event.content or "".join(full_content)
+                    content_json = {
+                        "tool_steps": [copy.deepcopy(step) for step in tool_steps],
+                    }
                     assistant_msg = await service.save_assistant_message(
-                        conversation_id, content, request, principal
+                        conversation_id,
+                        content,
+                        request,
+                        principal,
+                        content_json=content_json,
                     )
                     yield (
                         "data: "
@@ -246,6 +308,7 @@ async def create_message(
                                 "type": "done",
                                 "message_id": str(assistant_msg.id),
                                 "content": content,
+                                "tool_steps": tool_steps,
                             },
                             ensure_ascii=False,
                         )

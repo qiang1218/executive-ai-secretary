@@ -7,8 +7,7 @@ Coverage:
 * ``services.hermes_client.run_profile``: HTTP contract to the worker
   ``/v1/profile/run`` endpoint (with mocked transport).
 * ``services.hermes_client.test_anspire_provider``: HTTP contract for
-  the Anspire gateway ping (moved from ``worker_old.hermes_client`` to
-  ``services/hermes_client`` in Phase 2).
+  the Anspire gateway ping.
 """
 from __future__ import annotations
 

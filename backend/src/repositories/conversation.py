@@ -14,7 +14,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Conversation, ProjectConversation
-from services.authz import Principal
+from core.principal import Principal
 
 
 async def find_owned(

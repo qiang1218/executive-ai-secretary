@@ -90,9 +90,8 @@ class IdempotencyRecord(UUIDMixin, Base):
     )
 
 
-@event.listens_for(AuditEvent, "before_insert")
-def sign_audit_event(_mapper, connection, target: "AuditEvent") -> None:
-    # Imported lazily to keep the model module free of settings initialization cycles.
-    from repositories.audit_integrity import prepare_audit_event
-
-    prepare_audit_event(connection, target)
+# Note: the ``before_insert`` ORM event that signs AuditEvent rows with the
+# integrity-chain anchor is registered inside ``repositories.audit_integrity``.
+# Keeping the registration there means the model layer never imports the
+# repository layer, preserving the strict top-down dependency rule
+# (api -> services -> repositories -> models / db / core).

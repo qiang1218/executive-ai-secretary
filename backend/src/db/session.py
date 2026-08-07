@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from configs.settings import get_settings
 
@@ -36,6 +37,8 @@ def _to_sync_url(url: str) -> str:
     """
     if url.startswith("postgresql+asyncpg://"):
         return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    if url.startswith("sqlite+aiosqlite://"):
+        return url.replace("sqlite+aiosqlite://", "sqlite+pysqlite://", 1)
     return url
 
 
@@ -44,8 +47,22 @@ def _to_sync_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 _sync_url = _to_sync_url(settings.database_url)
 engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
-if not _sync_url.startswith("sqlite"):
+if _sync_url.startswith("sqlite"):
     # SQLite (used by tests) does not accept ``pool_size`` / ``max_overflow``.
+    #
+    # ``sqlite:///``:memory:`` defaults to a per-connection DB. Test fixtures
+    # populate ``Base.metadata.create_all(engine)`` once on the test thread,
+    # but ``fastapi.testclient.TestClient`` spins the ASGI lifespan up on a
+    # separate thread; without ``StaticPool + check_same_thread=False`` the
+    # lifespan sees an empty :memory: and the very first query fails with
+    # ``no such table: …``. The same fix also lets worker / job-runner code
+    # that runs in an executor's worker thread share tables with the test
+    # session.
+    engine_kwargs.update(
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
     engine_kwargs.update(
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
@@ -66,35 +83,32 @@ def get_db() -> Generator[Session, None, None]:
 # ---------------------------------------------------------------------------
 # 异步引擎（API 链路使用）
 # ---------------------------------------------------------------------------
+# SQLite (used by tests) drives its async path through ``aiosqlite`` so the
+# generic ``AsyncSession`` infrastructure is available for both production
+# (asyncpg) and tests (aiosqlite) without any caller having to fork on
+# ``settings.database_url``.
+_async_url = settings.database_url
 _async_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
-if not settings.database_url.startswith("sqlite"):
+if _async_url.startswith("sqlite"):
+    # ``StaticPool + check_same_thread=False`` so TestClient's lifespan portal
+    # (which spawns ASGI on a worker thread) and the test-fixture thread see
+    # the same :memory: database and the same ``Base.metadata`` state.
+    _async_engine_kwargs.update(
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
     _async_engine_kwargs.update(
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
     )
 
-async_engine: AsyncEngine | None
-AsyncSessionLocal: async_sessionmaker[AsyncSession] | None
-if settings.database_url.startswith("sqlite"):
-    # SQLite (used by tests) only supports the sync driver; the AsyncEngine
-    # is therefore disabled in test environments. Routes that require async
-    # access must be skipped or rewritten to use the sync session.
-    async_engine = None
-    AsyncSessionLocal = None
-else:
-    async_engine = create_async_engine(
-        settings.database_url, **_async_engine_kwargs
-    )
-    AsyncSessionLocal = async_sessionmaker(
-        bind=async_engine, expire_on_commit=False, autoflush=False
-    )
+async_engine = create_async_engine(_async_url, **_async_engine_kwargs)
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine, expire_on_commit=False, autoflush=False
+)
 
 
 async def get_db_async() -> AsyncIterator[AsyncSession]:
-    if async_engine is None or AsyncSessionLocal is None:
-        raise RuntimeError(
-            "Async DB session is not available in this environment "
-            "(sqlite is used). Use get_db() instead."
-        )
     async with AsyncSessionLocal() as session:
         yield session

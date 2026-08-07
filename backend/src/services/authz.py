@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
 
@@ -10,20 +9,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from configs.settings import Settings, get_settings
+from core.principal import Principal
+from core.security import as_utc, secure_equal, token_hash, utc_now
 from db.session import get_db_async
 from exceptions.errors import AppError
 from models import DataScopeGrant, Enterprise, OrganizationUnit, User, UserSession
-from core.security import as_utc, secure_equal, token_hash, utc_now
 
 
-@dataclass
-class Principal:
-    user: User
-    session: UserSession
-
-    @property
-    def enterprise_id(self) -> uuid.UUID:
-        return self.user.enterprise_id
+__all__ = ["Principal"]
 
 
 async def _read_session(
@@ -170,7 +163,7 @@ async def accessible_organization_unit_ids_for_user(
     roots = set(result.scalars().all())
     if not roots:
         return set()
-    # The hierarchy is shallow in phase one; iterate to include configured descendants safely.
+    # The hierarchy is intentionally only one level deep; include configured descendants later.
     accessible = set(roots)
     while True:
         result = await db.execute(

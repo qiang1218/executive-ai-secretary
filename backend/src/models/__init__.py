@@ -57,8 +57,6 @@ __all__ = [
     "SecretReference",
     "ModelProviderConfig",
     "EnterpriseModelAuthorization",
-    "McpToolConfig",
-    "McpToolDefinition",
     "McpSchemaRegistry",
     "HarnessConfigVersion",
     "OpportunityExperienceWeightPolicy",

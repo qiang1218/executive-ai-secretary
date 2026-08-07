@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Project
-from services.authz import Principal
+from core.principal import Principal
 
 
 async def find_by_id(db: AsyncSession, project_id: uuid.UUID | str) -> Project | None:

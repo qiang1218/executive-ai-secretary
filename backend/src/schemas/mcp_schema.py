@@ -66,6 +66,12 @@ class McpSchemaCatalogOut(BaseModel):
 class McpSchemaUpdate(BaseModel):
     """更新表配置的可选字段。"""
 
+    model_config = {
+        "extra": "forbid",
+        "from_attributes": True,
+        "validate_assignment": True,
+    }
+
     display_name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = Field(default=None)
     category: str | None = Field(default=None, max_length=80)

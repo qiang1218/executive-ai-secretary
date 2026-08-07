@@ -6,9 +6,9 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, computed_field, field_validator, model_validator
 
-from services.data_source_configuration import public_data_source_configuration
+from core.data_source_configuration import public_data_source_configuration
 
 
 class ORMModel(BaseModel):
@@ -87,6 +87,20 @@ class MessageOut(ORMModel):
     output_template_id: str | None
     source_data_as_of: datetime | None
     created_at: datetime
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def tool_steps(self) -> list[dict[str, Any]]:
+        """从 ``content_json.tool_steps`` 派生，便于前端在刷新会话后
+        仍能看到本轮的工具调用轨迹。
+
+        写入侧在 ``conversation_service.save_assistant_message`` 完成；
+        读出侧在本 schema 派生。这样 SSE 流与历史回放走同一条字段。
+        """
+        if not isinstance(self.content_json, dict):
+            return []
+        steps = self.content_json.get("tool_steps")
+        return list(steps) if isinstance(steps, list) else []
 
 
 class MemoryCreate(BaseModel):

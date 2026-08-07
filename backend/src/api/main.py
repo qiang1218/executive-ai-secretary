@@ -16,8 +16,8 @@ from fastapi.openapi.utils import get_openapi
 
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from repositories.audit_integrity import initialize_audit_chains
 from services.authz import csrf_protect
+from services.integrity import initialize_runtime_integrity
 from db.session import engine
 from exceptions.errors import (
     AppError,
@@ -43,11 +43,9 @@ def _build_lifespan() -> object:
         # 启动期校验：unsafe production 值会在这里 fail closed。
         settings.decoded_file_encryption_key()
         settings.integration_encryption_keys()
-        with engine.begin() as connection:
-            initialize_audit_chains(connection)
+        initialize_runtime_integrity(engine)
 
         # Phase 3: 当 service_role 包含 api / scheduler 时，同进程启动 job_runner。
-        # 这把 ``worker_old/runner.py`` 那条 LISTEN/NOTIFY 后台循环吸收到 API 进程内。
         runner = None
         try:
             from services.job_runner import (

@@ -1,16 +1,15 @@
+"""一次性运维脚本：迁移历史未加密的 Memory 行。"""
 from __future__ import annotations
 
 from sqlalchemy import select
 
 from configs.settings import get_settings
 from db.session import SessionLocal
+from core.personal_data import set_memory_content
 from models import Memory
-from services.personal_data import set_memory_content
 
 
 def migrate_plaintext_memories() -> int:
-    """Encrypt legacy memory rows before normal runtime traffic resumes."""
-
     settings = get_settings()
     migrated = 0
     with SessionLocal.begin() as db:

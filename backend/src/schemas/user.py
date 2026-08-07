@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from services.data_source_configuration import public_data_source_configuration
+from core.data_source_configuration import public_data_source_configuration
 
 
 class ORMModel(BaseModel):

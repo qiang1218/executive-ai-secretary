@@ -1,49 +1,38 @@
-"""Phase 1 cleanup regression tests.
+"""Phase 1 + Phase 4 cleanup regression tests.
 
-Verifies the removal of dead code introduced by the working/old hermes
-investigation (see the "Phase 1 cleanup plan" in the chat history):
-
-Removed dead code
-=================
+Phase 1 (commit ``072eed5``) removed dead code introduced by the
+working/old hermes investigation:
 
 * ``services/mcp_app`` — broken shim whose ``import worker.mcp_app`` always
   raised ``ImportError``; no production caller referenced it.
-* ``worker_old/runner.py``, ``assistant_orchestrator.py``,
-  ``file_extraction.py``, ``mcp_app.py`` — orphaned LISTEN/NOTIFY job loop
-  and its dependencies; ``main.py`` no longer starts the runner and no
-  production code imports any of these symbols.
+* Orphaned LISTEN/NOTIFY job loop and its dependencies; ``main.py`` no
+  longer starts the runner and no production code imports them.
 * ``Settings.mcp_hub_url`` — single-line orphan field with no callers.
 * ``Settings.hermes_model_default`` — defaulted to ``qwen3.5-plus`` but
   never read; ``main.py._run_worker`` writes ``HERMES_MODEL`` directly.
-* ``worker_old/integration_key_rotation`` — never committed; references to
-  it via ``repositories/rotate_integration_keys.py`` and
-  ``tests/test_postgres_integration_key_rotation.py`` were silently broken.
 
-Pre-existing broken shims fixed in the same pass
-=================================================
+Phase 4 (this commit) finishes the migration to MCP v2 by retiring the
+pre-MCP-v2 package entirely:
+
+* The 11 hard-coded tool constants and their management surfaces are
+  replaced by ``services.mcp_schema_service`` + the v2
+  ``mcp_schema_registry``.
+* ``services.business_tools.py`` is removed; the 11 hard-coded business
+  handlers are consolidated into the 3 generic MCP tools
+  (``discover_schema`` / ``query_schema`` / ``execute_query``) shipped by
+  ``worker/mcp_server.py``.
+
+Pre-existing broken shims fixed in the same pass (Phase 1):
 
 * ``services/file_key_rotation`` was a broken shim that did
-  ``import worker.file_key_rotation`` (the module never existed). It now
-  re-exports the real implementation living under ``worker_old``.
-* ``services/integration_key_rotation`` was the same kind of broken shim.
-  There is **no** implementation today; the module is now a stub with
-  constant ``INTEGRATION_ROTATION_ADVISORY_LOCK`` plus
-  ``rotate_integration_keys`` / ``verify_integration_key_version`` raising
+  ``import worker.file_key_rotation`` (the module never existed). It is now
+  the **real** implementation.
+* ``services/integration_key_rotation`` is a stub: constant
+  ``INTEGRATION_ROTATION_ADVISORY_LOCK`` plus ``rotate_integration_keys``
+  / ``verify_integration_key_version`` raising
   :class:`NotImplementedError`. The Postgres CLI
   (``repositories/rotate_integration_keys.py``) and both integration-key
-  test files now skip rather than erroring at collection.
-
-PEP 562 fallback chain fixed in the same pass
-=============================================
-
-* ``worker_old.__getattr__`` used to attempt ``importlib.import_module(
-  f"worker.{name}")`` — which always raised ``ModuleNotFoundError`` instead
-  of ``AttributeError`` and broke ``getattr(worker_old, "X")``. Now it falls
-  back to ``worker_old.{name}`` and translates import errors to
-  ``AttributeError``.
-* ``services.__getattr__`` extended its fallback chain to include
-  ``worker_old``, so cross-package aliases such as
-  ``services.mcp_registry`` resolve transparently.
+  test files now skip rather than error at collection.
 
 This module depends on import semantics only — no DB, no network. The
 ``conftest.py`` of the suite still wires up an in-memory sqlite app,
@@ -51,7 +40,6 @@ which is fine for these checks.
 """
 from __future__ import annotations
 
-import importlib
 from types import ModuleType
 
 import pytest
@@ -59,25 +47,15 @@ import pytest
 from configs.settings import Settings
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1. Removed dead code must be unreachable via the public packages
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 REMOVED_FROM_SERVICES = (
-    "mcp_app",  # broken shim; targeted worker.mcp_app, which never existed
-)
-
-REMOVED_FROM_WORKER_OLD = (
-    "runner",                 # LISTEN/NOTIFY job loop with zero callers
-    "assistant_orchestrator",  # only ever imported by runner.py
-    "file_extraction",         # only ever imported by runner.py
-    "mcp_app",                 # isolated FastAPI MCP app, zero callers
-    # ``integration_key_rotation`` was *never* committed; the file does not
-    # exist on disk. Keep it gone until the implementation lands.
-    "integration_key_rotation",
-    # Phase 2 consolidated these into ``worker`` / ``services``:
-    "hermes_client",
-    "hermes_runtime",
+    "mcp_app",                  # Phase 1: broken shim
+    "business_tools",           # Phase 4: 11 hard-coded handlers consolidated
+    "mcp_tool_service",         # Phase 4: case-by-case tool management
+    "mcp_registry",             # Phase 4: legacy tool registry
 )
 
 
@@ -89,21 +67,26 @@ def test_services_removed_submodules(name: str) -> None:
         getattr(services_pkg, name)
 
 
-@pytest.mark.parametrize("name", REMOVED_FROM_WORKER_OLD)
-def test_worker_old_removed_submodules(name: str) -> None:
-    import worker_old as worker_old_pkg
+def test_worker_old_package_retired() -> None:
+    """The retired legacy worker package is gone after cleanup — both the
+    top-level package and its individual submodules must be unreachable.
+    """
+    import importlib
 
-    with pytest.raises(AttributeError):
-        getattr(worker_old_pkg, name)
+    with pytest.raises(ImportError):
+        importlib.import_module("worker_old")
+    with pytest.raises(ImportError):
+        importlib.import_module("worker_old.mcp_registry")
+    with pytest.raises(ImportError):
+        importlib.import_module("worker_old.file_key_rotation")
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 2. Surviving cross-package names still resolve
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2. Surviving services modules still resolve via PEP 562
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 SERVICES_SURVIVING = (
-    # locally-defined services
-    "business_tools",
+    # locally-defined services (Phase 1 + Phase 4 survivors)
     "capabilities",
     "conversation_service",
     "data_capability_service",
@@ -112,13 +95,14 @@ SERVICES_SURVIVING = (
     "health_service",
     "job_management_service",
     "mcp_schema_service",
-    "mcp_tool_service",
     "memory_service",
     "model_admin_service",
-    # cross-package names whose physical location is worker_old
-    "file_key_rotation",
+    # local shim
     "integration_key_rotation",
-    "mcp_registry",
+    # cross-package names whose physical location is worker/utils
+    "file_key_rotation",
+    "cli",
+    "job_state",
 )
 
 
@@ -130,23 +114,10 @@ def test_services_submodule_still_resolvable(name: str) -> None:
     assert isinstance(module, ModuleType), f"services.{name} must resolve to a module"
 
 
-WORKER_OLD_SURVIVING = (
-    "file_key_rotation",
-    "mcp_registry",
-)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 3. Settings field removals (Phase 1)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-
-@pytest.mark.parametrize("name", WORKER_OLD_SURVIVING)
-def test_worker_old_submodule_still_resolvable(name: str) -> None:
-    import worker_old as worker_old_pkg
-
-    module = getattr(worker_old_pkg, name)
-    assert isinstance(module, ModuleType)
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 3. Settings field removals
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @pytest.mark.parametrize("field", ["mcp_hub_url", "hermes_model_default"])
 def test_settings_removed_orphan_fields(field: str) -> None:
@@ -157,7 +128,7 @@ def test_settings_removed_orphan_fields(field: str) -> None:
 
 
 def test_settings_keeps_new_hermes_worker_fields() -> None:
-    """Phase 1 must not have touched the new Hermes Worker surface."""
+    """Phase 1+4 must not have touched the new Hermes Worker surface."""
     expected = (
         "worker_host",
         "worker_port",
@@ -172,23 +143,21 @@ def test_settings_keeps_new_hermes_worker_fields() -> None:
         assert field in Settings.model_fields, f"Settings.{field} must remain present"
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 4. Re-exports point at the *real* implementations
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 4. ``services.file_key_rotation`` is the real implementation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def test_services_file_key_rotation_is_a_real_alias() -> None:
-    """``services.file_key_rotation`` is a re-export shim that must surface
-    the *same Python objects* as ``worker_old.file_key_rotation`` — not a
-    placeholder, not a copy.
+
+def test_services_file_key_rotation_is_real_implementation() -> None:
+    """Phase 4 promotion: ``services.file_key_rotation`` is the implementation.
+    Callers must be able to import the symbols directly via the services
+    surface.
     """
-    from services import file_key_rotation as services_mod
-    import worker_old.file_key_rotation as real_mod
+    from services import file_key_rotation
 
-    for name in ("rotate_file_keys", "verify_file_key_version"):
-        assert getattr(services_mod, name) is getattr(real_mod, name), (
-            f"services.file_key_rotation.{name} must be worker_old.file_key_rotation.{name}"
-        )
-    assert services_mod.ROTATION_ADVISORY_LOCK == real_mod.ROTATION_ADVISORY_LOCK
+    assert callable(file_key_rotation.rotate_file_keys)
+    assert callable(file_key_rotation.verify_file_key_version)
+    assert isinstance(file_key_rotation.ROTATION_ADVISORY_LOCK, int)
 
 
 def test_services_integration_key_rotation_is_a_not_implemented_stub() -> None:
@@ -221,67 +190,51 @@ def test_repositories_rotate_integration_keys_uses_services_stub() -> None:
     assert ikr.verify_integration_key_version is verify_integration_key_version
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 5. PEP 562 fallback chain correctness
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def test_repositories_rotate_file_keys_uses_services_implementation() -> None:
+    """Phase 4 promotion: ``utils.rotate_file_keys`` (CLI entry)
+    imports directly from ``services.file_key_rotation``.
 
-def test_services_mcp_registry_falls_through_to_worker_old() -> None:
-    """``services.mcp_registry`` must resolve to ``worker_old.mcp_registry``
-    via the PEP 562 fallback chain (``services → worker → utils → worker_old``).
+    After the Phase 5 cleanup the CLI lives in ``utils/`` instead of
+    ``repositories/``. This guards against regressions by checking the script
+    is wired to ``services.file_key_rotation``.
     """
-    from services import mcp_registry as via_services
-    import worker_old.mcp_registry as via_worker_old
+    import inspect
 
-    assert via_services is via_worker_old
-    assert hasattr(via_services, "MCP_TOOL_SPECS")
-    assert hasattr(via_services, "effective_catalog")
-    assert hasattr(via_services, "registered_spec")
+    from utils import rotate_file_keys
+
+    src = inspect.getsource(rotate_file_keys)
+    assert "services.file_key_rotation" in src
+    assert "worker_old" not in src
 
 
-def test_worker_old_getattr_translates_import_error_to_attribute_error() -> None:
-    """``worker_old.<X>`` for an X that does not exist in any package
-    must raise :class:`AttributeError` (not :class:`ModuleNotFoundError`),
-    so that ``getattr(worker_old, "X", default)`` returns the default.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 5. PEP 562 fallback chain is healthy and well-formed
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+def test_services_getattr_unknown_raises_attribute_error() -> None:
+    """``services.<X>`` for an X that does not exist anywhere in the
+    fallback chain must raise :class:`AttributeError` (not
+    :class:`ModuleNotFoundError`), so that ``getattr(obj, name, default)``
+    returns the default. This protects ``from services import *`` style
+    tooling and any ``hasattr`` checks in routers.
     """
-    import worker_old as worker_old_pkg
+    import services as services_pkg
 
-    # Unknown name not present anywhere.
     with pytest.raises(AttributeError):
-        getattr(worker_old_pkg, "definitely_does_not_exist")
+        getattr(services_pkg, "definitely_does_not_exist")
 
-    # ``integration_key_rotation`` was *never* committed; previously the
-    # ``__getattr__`` would attempt ``worker.<X>`` and raise
-    # ``ModuleNotFoundError`` (a non-``AttributeError`` exception that
-    # PEP 562 propagated, breaking ``getattr(..., default)``).
-    with pytest.raises(AttributeError, match=r"integration_key_rotation"):
-        getattr(worker_old_pkg, "integration_key_rotation")
-
-    # ``getattr(obj, name, default)`` must observe the default.
     sentinel = object()
-    assert getattr(worker_old_pkg, "integration_key_rotation", sentinel) is sentinel
+    assert getattr(services_pkg, "definitely_does_not_exist", sentinel) is sentinel
 
 
-def test_worker_old_file_key_rotation_via_getattr_works() -> None:
-    """The ModuleNotFoundError-turned-AttributeError fix must not regress
-    the cross-package alias through ``services.__getattr__``.
+def test_services_file_key_rotation_via_getattr_works() -> None:
+    """The cross-package name must still resolve through
+    ``services.__getattr__`` so existing callers that used
+    ``from services import file_key_rotation`` keep working after the
+    cleanup phases.
     """
-    import worker_old as worker_old_pkg
-    import worker_old.file_key_rotation as direct
+    import services as services_pkg
+    from services import file_key_rotation as direct
 
-    assert getattr(worker_old_pkg, "file_key_rotation") is direct
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 6. Sanity check that the production-time import paths are still healthy
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-@pytest.mark.parametrize(
-    "import_path",
-    [
-        "worker_old.mcp_registry",
-        "worker_old.file_key_rotation",
-    ],
-)
-def test_direct_imports_of_worker_old_modules(import_path: str) -> None:
-    module = importlib.import_module(import_path)
-    assert isinstance(module, ModuleType)
+    assert getattr(services_pkg, "file_key_rotation") is direct

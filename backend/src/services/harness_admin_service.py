@@ -1,16 +1,7 @@
 """Harness admin service.
 
-Follows the anspire service pattern: a class that receives the database
-session (and settings when needed) in the constructor and exposes business
-methods. The ``/admin/harness`` router instantiates
-``HarnessAdminService(db, settings)`` and delegates all DB / business logic
-to it. The router is responsible only for parameter parsing and response
-return.
-
-Phase 2: ``simulate_harness`` no longer shells out to ``hermes-agent`` via
-``worker_old.hermes_client.run_hermes``.  Instead the call is forwarded to
-the worker ``/v1/profile/run`` endpoint which executes the same prompt
-template (kept in ``worker.profile_prompts``) via a plain ``httpx`` call.
+``HarnessAdminService(db, settings)`` 暴露所有 harness 相关业务方法；
+``/admin/harness`` 路由只做参数解析与响应包装。
 """
 from __future__ import annotations
 
@@ -23,7 +14,6 @@ from typing import Any
 from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from configs.settings import Settings
 from core.security import utc_now
@@ -54,6 +44,7 @@ from services.authz import Principal
 from services.hermes_client import HermesClient, HermesStreamEvent
 from services.harness_config import (
     HARNESS_SCHEMA_VERSION,
+    MCP_V2_TOOLS,
     SAFETY_KERNEL_SUMMARY,
     active_harness_config,
     apply_glossary,
@@ -63,16 +54,10 @@ from services.harness_config import (
     validate_harness_config,
 )
 from services.query_spec import normalize_query_spec
-from worker_old.mcp_registry import effective_catalog
 
 
 def _parse_json_response(text: str) -> dict:
-    """Strip Markdown code fences / surrounding prose and parse JSON.
-
-    Phase 2: previously lived in ``worker_old.hermes_client.parse_json_response``.
-    Kept as a thin shim here so the rest of the service file does not have
-    to depend on any old-architecture module.
-    """
+    """Strip Markdown code fences / surrounding prose and parse JSON."""
     import json
     import re
 
@@ -261,14 +246,10 @@ class HarnessAdminService:
         request: Request,
     ) -> HarnessConfigOut:
         db = self._session
-        # effective_catalog is a worker-module helper that walks the DB
-        # synchronously; run it in a threadpool so we do not block the event
-        # loop, then validate the harness config against its allowed tools.
-        catalog = await run_in_threadpool(effective_catalog, db, principal.enterprise_id)
-        clean = validate_harness_config(
-            payload.config,
-            allowed_tools={item["tool_name"] for item in catalog},
-        )
+        # MCP v2 后，``candidate_tools`` 只接受 {discover_schema, query_schema,
+        # execute_query} 这套通用工具名；validate_harness_config 的默认
+        # ``allowed_tools`` 已经覆盖。
+        clean = validate_harness_config(payload.config)
         current = await db.scalar(
             select(HarnessConfigVersion)
             .where(
@@ -358,11 +339,7 @@ class HarnessAdminService:
         )
         if current:
             current.is_active = False
-        catalog = await run_in_threadpool(effective_catalog, db, principal.enterprise_id)
-        clean = validate_harness_config(
-            source.config_json,
-            allowed_tools={item["tool_name"] for item in catalog},
-        )
+        clean = validate_harness_config(source.config_json)
         row = HarnessConfigVersion(
             enterprise_id=principal.enterprise_id,
             version=await next_harness_version(db, principal.enterprise_id),
@@ -399,11 +376,7 @@ class HarnessAdminService:
         db = self._session
         settings = self._settings
         current = await active_harness_config(db, principal.enterprise_id)
-        catalog = await run_in_threadpool(effective_catalog, db, principal.enterprise_id)
-        config = validate_harness_config(
-            payload.config or current.config_json,
-            allowed_tools={item["tool_name"] for item in catalog},
-        )
+        config = validate_harness_config(payload.config or current.config_json)
         scope, resolved_ids = await self._simulation_scope(
             principal.enterprise_id, payload.organization_scope
         )
@@ -464,14 +437,9 @@ class HarnessAdminService:
         except RuntimeError as exc:
             raise AppError(422, "harness_simulation_failed", str(exc)) from exc
 
-        planner_catalog = await run_in_threadpool(
-            effective_catalog, db, principal.enterprise_id
-        )
-        planner_tools = {
-            item["tool_name"]
-            for item in planner_catalog
-            if item["is_enabled"] and item["planner_enabled"]
-        }
+        # MCP v2 的 3 个通用工具始终启用；先前通过 ``effective_catalog`` 过滤
+        # ``is_enabled`` / ``planner_enabled`` 标志的逻辑不再适用。
+        planner_tools = set(MCP_V2_TOOLS)
         candidate_tools = [
             name for name in (rule or {}).get("candidate_tools", []) if name in planner_tools
         ]

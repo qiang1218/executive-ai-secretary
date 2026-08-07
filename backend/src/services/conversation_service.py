@@ -66,7 +66,7 @@ from services.conversation_scope import (
     scope_snapshot,
     set_conversation_scope,
 )
-from services.harness_config import active_harness_config
+from services.harness_config import active_harness_config, compose_chat_system_prompt
 from services.idempotency import replay, save_response
 from services.model_authorization import authorized_model_rows, resolve_authorized_model
 
@@ -632,8 +632,8 @@ class ConversationService:
         payload: MessageCreate,
         request: Request,
         principal: Principal,
-    ) -> tuple[Message, list[Message], Conversation, dict[str, str]]:
-        """创建 user message，返回 (user_msg, context_messages, conversation, llm_config)。
+    ) -> tuple[Message, list[Message], Conversation, dict[str, str], tuple[str, str]]:
+        """创建 user message，返回 (user_msg, context_messages, conversation, llm_config, harness_prompt)。
 
         context_messages 包含历史消息 + 新 user message，供 worker 作为完整
         上下文使用。复用 ``create_message`` 的前半段校验与 user message 创建
@@ -641,6 +641,11 @@ class ConversationService:
 
         llm_config 从数据库 ModelProviderConfig 读取，包含：
           base_url, api_key (已解密), provider, api_mode, model
+
+        harness_prompt = ``(system_prompt, harness_version_marker)``：
+        从 ``HarnessConfigVersion.config_json.prompts.system`` 派生，供 Chat
+        入口作为 ``system_prompt=`` 注入到 worker 请求；marker 是 "default"
+        或 "custom" —— 用于审计/调试透出"用户在跑这轮聊天时是哪一份 prompt"。
 
         注意：流式接口不适合幂等，因此不调用 ``replay``/``save_response``。
         """
@@ -750,7 +755,12 @@ class ConversationService:
             "api_mode": "chat_completions",
             "model": provider_config.model_id,
         }
-        return message, context_messages, conversation, llm_config
+        # 把企业 harness 的 ``prompts.system`` 注入 worker；为空/无效配置时
+        # 走 ``DEFAULT_HARNESS_CONFIG``，保证 worker 永远收到非空 system_prompt。
+        harness_prompt = compose_chat_system_prompt(
+            active_harness.config_json if active_harness is not None else None
+        )
+        return message, context_messages, conversation, llm_config, harness_prompt
 
     async def save_assistant_message(
         self,
@@ -758,6 +768,7 @@ class ConversationService:
         content: str,
         request: Request,
         principal: Principal,
+        content_json: dict[str, Any] | None = None,
     ) -> Message:
         """流结束后保存 assistant message（一次落库）。
 
@@ -765,6 +776,9 @@ class ConversationService:
         - 创建 assistant message（status=completed）
         - 更新 conversation.last_message_at
         - record_audit
+
+        ``content_json`` 用于写入 tool_steps 等结构化信息；``None`` 时按 v1 行为
+        落地为空字典（保持向后兼容）。
         """
         conversation = await self._owned_conversation(
             principal, conversation_id, lock=True
@@ -781,7 +795,7 @@ class ConversationService:
             conversation_id=conversation.id,
             role="assistant",
             content=content,
-            content_json={},
+            content_json=content_json if content_json is not None else {},
             requested_model_id=conversation.selected_model_id,
             sequence=sequence,
             status="completed",

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Connection, Select, select, update
+from sqlalchemy import Connection, Select, event, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
@@ -391,3 +391,13 @@ def verify_audit_chain(
         invalid_event_ids=unique_invalid_ids,
         errors=unique_errors,
     )
+
+
+# ---------------------------------------------------------------------------
+# ORM event registration
+# ---------------------------------------------------------------------------
+
+
+@event.listens_for(AuditEvent, "before_insert")
+def _sign_audit_event_on_insert(_mapper, connection, target: "AuditEvent") -> None:
+    prepare_audit_event(connection, target)

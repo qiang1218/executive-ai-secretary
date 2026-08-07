@@ -30,7 +30,6 @@ from services.harness_admin_service import HarnessAdminService
 from services.health_service import HealthService
 from services.job_management_service import JobManagementService
 from services.mcp_schema_service import McpSchemaService
-from services.mcp_tool_service import McpToolService
 from services.memory_service import MemoryService
 from services.model_admin_service import ModelAdminService
 from services.hermes_client import HermesClient
@@ -144,14 +143,6 @@ async def get_project_service(session: AsyncSessionDep) -> ProjectService:
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
 
 
-async def get_mcp_tool_service(session: AsyncSessionDep) -> McpToolService:
-    """FastAPI dependency: instantiate ``McpToolService`` with the request session."""
-    return McpToolService(session)
-
-
-McpToolServiceDep = Annotated[McpToolService, Depends(get_mcp_tool_service)]
-
-
 async def get_mcp_schema_service(session: AsyncSessionDep) -> McpSchemaService:
     """FastAPI dependency: instantiate ``McpSchemaService``."""
     return McpSchemaService(session)
@@ -261,7 +252,6 @@ __all__ = [
     "OrganizationServiceDep",
     "DataSourceServiceDep",
     "McpSchemaServiceDep",
-    "McpToolServiceDep",
     "AuthServiceDep",
     "AdminServiceDep",
     "ConversationServiceDep",
@@ -282,7 +272,6 @@ __all__ = [
     "OrganizationService",
     "DataSourceService",
     "McpSchemaService",
-    "McpToolService",
     "ConversationService",
     "ModelAdminService",
     "HarnessAdminService",
@@ -305,7 +294,6 @@ __all__ = [
     "get_organization_service",
     "get_data_source_service",
     "get_mcp_schema_service",
-    "get_mcp_tool_service",
     "get_conversation_service",
     "get_model_admin_service",
     "get_harness_admin_service",

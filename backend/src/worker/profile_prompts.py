@@ -1,18 +1,6 @@
-"""Hermes profile artefacts — physically owned by ``worker``.
+"""Hermes profile artefacts（提示词 / token 预算 / 安全 kernel）。
 
-Phase 2 consolidation: the profile prompts / output-token budgets / security
-kernel / per-stage prompt builder formerly lived inside
-``worker_old/hermes_runtime.py`` together with the deprecated subprocess
-execution path.  We split the call-site separation: the textual artefacts
-and the **prompt-builder** logic are needed by the new ``worker.app``
-``/v1/profile/run`` endpoint and have to live inside the ``worker`` package;
-the ``subprocess`` execution logic (``execute_run``) is replaced by a
-straight ``httpx`` call to the LLM provider from ``worker.app`` itself.
-
-Keeping these helpers exclusively inside ``worker`` makes the worker truly
-self-contained for profile runs and lets the API layer treat the worker as
-an opaque Hermes emulator (no ``hermes_runtime``-specific knowledge needed
-in the API tree).
+仅本包可见，API 层把 worker 当作不透明的 Hermes emulator 调用。
 """
 from __future__ import annotations
 
@@ -223,9 +211,7 @@ def max_output_tokens(profile: str) -> int:
 def build_profile_prompt(profile: str, payload: dict[str, Any]) -> str:
     """拼接 SECURITY_KERNEL + profile 指令 + 业务 prompt + authorized_input。
 
-    这个函数原本在 ``worker_old.hermes_runtime._build_prompt``；Phase 2 把它
-    搬到 worker，并对齐 worker 端 profile 实现（httpx 直调 LLM，不再需要
-    hermes-agent CLI）。
+    Phase 2 起由 worker 端 profile 调用（httpx 直调 LLM，不再需要 hermes-agent CLI）。
     """
     authorized_payload = dict(payload)
     harness_config = authorized_payload.pop("harness_config", {})
