@@ -121,20 +121,7 @@ def _run_api() -> None:
 
 
 def _run_worker() -> None:
-    import os
-
     import uvicorn
-
-    # 将 hermes 项目的 site-packages 加入 sys.path，使 run_agent / hermes_constants 等私有模块可用。
-    _HERMES_VENV_SITE = Path("D:/anchnet/hermes/.venv/Lib/site-packages")
-    if _HERMES_VENV_SITE.exists() and str(_HERMES_VENV_SITE) not in sys.path:
-        sys.path.insert(0, str(_HERMES_VENV_SITE))
-
-    # Hermes AIAgent 需要的环境变量
-    os.environ.setdefault("HERMES_BASE_URL", "https://open-gateway.anspire.ai/v6")
-    os.environ.setdefault("HERMES_API_KEY", "sk-bLOrWpvFjVGeNq2o9n1JyW1tVowTSzDs")
-    os.environ.setdefault("HERMES_MODEL", "qwen3.5-plus")
-    os.environ.setdefault("OPENAI_API_KEY", os.environ["HERMES_API_KEY"])
 
     settings = get_settings()
     uvicorn.run(

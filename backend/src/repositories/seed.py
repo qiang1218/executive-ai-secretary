@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
+from croniter import croniter
 from sqlalchemy import select
 
 from configs.settings import get_settings
@@ -19,6 +21,7 @@ from models import (
     ProjectConversation,
     Report,
     ReportVersion,
+    ScheduledTask,
     User,
 )
 
@@ -49,21 +52,47 @@ def seed(enterprise_slug: str) -> None:
             )
         )
         if data_source is None:
+            data_source = DataSource(
+                enterprise_id=enterprise.id,
+                key="demo-sanitized-source",
+                display_name="演示脱敏经营数据",
+                source_type="feishu_three_table",
+                schema_version="3.0",
+                is_enabled=True,
+                configuration_json={
+                    "database": "source-postgres",
+                    "schema": "executive_source_v3",
+                    "classification": "synthetic",
+                    "activation_policy": "all_three_atomic",
+                },
+                secret_reference_key=SOURCE_DATABASE_CONFIG_REFERENCE,
+            )
+            db.add(data_source)
+            db.flush()  # 取 data_source.id 用于关联 ScheduledTask
+
+        # 默认调度任务：每日 02:00 Asia/Shanghai 自动同步
+        scheduled_task = db.scalar(
+            select(ScheduledTask).where(
+                ScheduledTask.enterprise_id == enterprise.id,
+                ScheduledTask.data_source_id == data_source.id,
+            )
+        )
+        if scheduled_task is None:
+            tz = ZoneInfo("Asia/Shanghai")
+            now_in_tz = datetime.now(UTC).astimezone(tz)
+            cron = croniter("0 2 * * *", now_in_tz)
+            next_run = cron.get_next(datetime).astimezone(UTC)
             db.add(
-                DataSource(
+                ScheduledTask(
                     enterprise_id=enterprise.id,
-                    key="demo-sanitized-source",
-                    display_name="演示脱敏经营数据",
-                    source_type="feishu_three_table",
-                    schema_version="3.0",
+                    data_source_id=data_source.id,
+                    key="demo-daily-sync",
+                    task_type="data.sync",
+                    cron_expression="0 2 * * *",
+                    timezone="Asia/Shanghai",
                     is_enabled=True,
-                    configuration_json={
-                        "database": "source-postgres",
-                        "schema": "executive_source_v3",
-                        "classification": "synthetic",
-                        "activation_policy": "all_three_atomic",
-                    },
-                    secret_reference_key=SOURCE_DATABASE_CONFIG_REFERENCE,
+                    next_run_at=next_run,
+                    configuration_json={"activation_mode": "all_three_atomic"},
                 )
             )
         if marker:

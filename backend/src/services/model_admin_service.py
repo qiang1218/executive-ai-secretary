@@ -30,12 +30,12 @@ from repositories import model_provider_config as model_config_repo
 from repositories.audit import record_audit
 from services.anspire import (
     ANSPIRE_ENDPOINT_URL,
-    ANSPIRE_MODELS,
     ANSPIRE_PROVIDER,
     DEFAULT_ANSPIRE_MODEL,
     AnspireConfigurationError,
     decrypt_anspire_api_key,
     encrypt_anspire_api_key,
+    list_anspire_models_for_admin,
     masked_api_key,
     validate_anspire_model,
 )
@@ -74,7 +74,8 @@ class ModelAdminService:
     async def _get_config(self, principal: Principal) -> ModelProviderConfig | None:
         return await model_config_repo.find_active(self._session, principal.enterprise_id)
 
-    def _build_provider_response(self, config: ModelProviderConfig | None) -> ModelProviderOut:
+    async def _build_provider_response(self, config: ModelProviderConfig | None) -> ModelProviderOut:
+        models = await list_anspire_models_for_admin(config, self._settings)
         return ModelProviderOut(
             endpoint_url=ANSPIRE_ENDPOINT_URL,
             documentation_url="https://llm.anspire.ai/?tab=models",
@@ -87,7 +88,7 @@ class ModelAdminService:
             last_test_status=config.last_test_status if config else None,
             last_test_latency_ms=config.last_test_latency_ms if config else None,
             last_test_error=config.last_test_error if config else None,
-            models=list(ANSPIRE_MODELS),
+            models=models,
             updated_at=config.updated_at if config else None,
         )
 
@@ -125,7 +126,7 @@ class ModelAdminService:
     # Model provider endpoints
     # ------------------------------------------------------------------
     async def get_model_provider(self, principal: Principal) -> ModelProviderOut:
-        return self._build_provider_response(await self._get_config(principal))
+        return await self._build_provider_response(await self._get_config(principal))
 
     async def update_model_provider(
         self,
@@ -220,7 +221,7 @@ class ModelAdminService:
         )
         await db.commit()
         await db.refresh(config)
-        return self._build_provider_response(config)
+        return await self._build_provider_response(config)
 
     async def test_model_provider(
         self,
@@ -311,13 +312,14 @@ class ModelAdminService:
             row.model_id: row
             for row in result.scalars().all()
         }
+        models = await list_anspire_models_for_admin(config, self._settings)
         return AdminModelCatalogOut(
             credential_version=config.credential_version if config else 1,
             is_configured=bool(config and config.api_key_ciphertext),
             is_enabled=bool(config and config.is_enabled),
             models=[
                 self._authorization_out(rows.get(str(item["id"])), item, config)
-                for item in ANSPIRE_MODELS
+                for item in models
             ],
         )
 

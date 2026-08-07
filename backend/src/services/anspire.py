@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 
+import httpx
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from configs.settings import Settings
 from models import ModelProviderConfig
+
+logger = logging.getLogger(__name__)
 
 ANSPIRE_PROVIDER = "anspire"
 ANSPIRE_ENDPOINT_URL = "https://open-gateway.anspire.ai/v6"
@@ -25,12 +31,6 @@ ANSPIRE_CHAT_MODELS: tuple[dict[str, str], ...] = (
     {"id": "gpt-5.5", "name": "GPT 5.5", "family": "GPT", "profile": "通用复杂推理"},
     {"id": "gpt-5.4", "name": "GPT 5.4", "family": "GPT", "profile": "高级经营研究"},
     {"id": "gpt-5.4-mini", "name": "GPT 5.4 Mini", "family": "GPT", "profile": "轻量快速分析"},
-    {
-        "id": "claude-fable-5",
-        "name": "Claude Fable 5",
-        "family": "Claude",
-        "profile": "旗舰知识工作",
-    },
     {
         "id": "claude-opus-4-8",
         "name": "Claude Opus 4.8",
@@ -49,6 +49,12 @@ ANSPIRE_CHAT_MODELS: tuple[dict[str, str], ...] = (
         "name": "Claude Sonnet 4.6",
         "family": "Claude",
         "profile": "质量与速度平衡",
+    },
+    {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "family": "Claude",
+        "profile": "下一代旗舰推理",
     },
     {
         "id": "claude-haiku-4-5-20251001",
@@ -76,10 +82,10 @@ ANSPIRE_CHAT_MODELS: tuple[dict[str, str], ...] = (
     },
     {"id": "glm-5.1", "name": "GLM 5.1", "family": "GLM", "profile": "稳定通用"},
     {
-        "id": "deepseek-v4-pro",
-        "name": "DeepSeek V4 Pro",
+        "id": "deepseek-v4-pro-max",
+        "name": "DeepSeek V4 Pro Max",
         "family": "DeepSeek",
-        "profile": "深度推理",
+        "profile": "深度推理增强",
     },
     {
         "id": "deepseek-v4-flash",
@@ -143,6 +149,7 @@ ANSPIRE_CHAT_MODELS: tuple[dict[str, str], ...] = (
         "profile": "极速问答",
     },
     {"id": "kimi-k2.5", "name": "Kimi K2.5", "family": "Kimi", "profile": "长文档分析"},
+    {"id": "kimi-k3", "name": "Kimi K3", "family": "Kimi", "profile": "新一代长文档分析"},
     {"id": "minimax-m2.7", "name": "MiniMax M2.7", "family": "MiniMax", "profile": "复杂对话"},
     {"id": "minimax-m2.5", "name": "MiniMax M2.5", "family": "MiniMax", "profile": "稳定通用"},
     {"id": "qwen3.5-plus", "name": "Qwen 3.5 Plus", "family": "Qwen", "profile": "综合推理"},
@@ -167,6 +174,7 @@ ANSPIRE_CHAT_MODELS: tuple[dict[str, str], ...] = (
     },
     {"id": "qwen3.5-27b", "name": "Qwen 3.5 27B", "family": "Qwen", "profile": "轻量推理"},
     {"id": "qwen3.7-max", "name": "Qwen 3.7 Max", "family": "Qwen", "profile": "旗舰综合推理"},
+    {"id": "qwen3.8-max", "name": "Qwen 3.8 Max", "family": "Qwen", "profile": "新一代旗舰综合推理"},
 )
 
 # The backend exposes the complete provider catalog returned by Anspire's
@@ -383,3 +391,130 @@ def runtime_provider_config(
         "model_id": validate_anspire_model(model_id or config.model_id),
         "api_key": decrypt_anspire_api_key(config, settings),
     }
+
+
+# --------------------------------------------------------------------------
+# 网关动态拉取（叠加白名单过滤）
+# --------------------------------------------------------------------------
+# 进程内缓存：(endpoint_url, api_key_hint) -> (fetch_timestamp, gateway_model_ids)
+# 同一企业同一 endpoint 在 TTL 内复用，避免每次请求都打网关。
+_GATEWAY_MODELS_CACHE: dict[tuple[str, str], tuple[float, frozenset[str]]] = {}
+_GATEWAY_MODELS_TTL = 3600.0  # 秒
+# 网关拉取并发去重锁：同一 cache_key 的并发请求只打一次网关，其他等结果。
+_GATEWAY_MODELS_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+async def fetch_anspire_chat_model_ids(
+    api_key: str,
+    endpoint_url: str = ANSPIRE_ENDPOINT_URL,
+    *,
+    timeout: float = 2.0,
+) -> frozenset[str]:
+    """从 Anspire 网关 ``GET /models`` 拉取当前可用的模型 ID 集合。
+
+    返回网关报告的模型 ID（已小写化）。网关返回 4xx/5xx 或格式异常时抛
+    :class:`AnspireConfigurationError`，由调用方决定是否回退到静态白名单。
+    """
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    url = f"{endpoint_url.rstrip('/')}/models"
+    # 打印调用的接口和鉴权信息（仅 key 后 4 位，避免泄露完整密钥）
+    print(
+        f"[anspire] GET {url}  api_key=sk-***{api_key[-4:] if api_key else 'unknown'}",
+        flush=True,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(url, headers=headers)
+    print(
+        f"[anspire] <- status={resp.status_code} content_length={len(resp.content)}",
+        flush=True,
+    )
+    if resp.status_code != 200:
+        print(
+            f"[anspire] !! failed url={url} status={resp.status_code} body={resp.text[:500]}",
+            flush=True,
+        )
+        raise AnspireConfigurationError(
+            "anspire_gateway_unavailable",
+            f"Anspire 网关 /models 返回 HTTP {resp.status_code}",
+        )
+    payload = resp.json()
+    items = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        print(
+            f"[anspire] !! invalid_format url={url} payload_keys="
+            f"{list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__}",
+            flush=True,
+        )
+        raise AnspireConfigurationError(
+            "anspire_gateway_response_invalid",
+            "Anspire 网关 /models 返回格式异常",
+        )
+    model_ids = frozenset(
+        str(item["id"]).strip().lower()
+        for item in items
+        if isinstance(item, dict) and item.get("id")
+    )
+    print(
+        f"[anspire] parsed count={len(model_ids)} sample={sorted(list(model_ids))[:5]}",
+        flush=True,
+    )
+    return model_ids
+
+
+async def list_anspire_models_for_admin(
+    config: ModelProviderConfig | None,
+    settings: Settings,
+) -> list[dict[str, object]]:
+    """返回给管理后台的模型目录。
+
+    优先从 Anspire 网关拉取当前可用模型，叠加静态白名单过滤：
+
+    - 网关有 + 白名单有 → 展示（已审核且可用）
+    - 网关无 + 白名单有 → 不展示（已下线）
+    - 网关有 + 白名单无 → 不展示（未审核，需先更新白名单发版）
+    - 网关不可用或企业未配 API Key → 回退到静态白名单全量
+
+    non-chat 模型（图像/视频/向量/rerank）始终用静态白名单，因为网关
+    ``/models`` 主要返回 chat 模型，且这些模型不参与聊天路由。
+    """
+    static_models = list(ANSPIRE_MODELS)
+    if config is None or not config.api_key_ciphertext or not config.api_key_nonce:
+        return static_models
+
+    try:
+        api_key = decrypt_anspire_api_key(config, settings)
+    except AnspireConfigurationError:
+        return static_models
+
+    endpoint = config.endpoint_url or ANSPIRE_ENDPOINT_URL
+    cache_key = (endpoint, api_key[-4:])
+    now = time.time()
+    cached = _GATEWAY_MODELS_CACHE.get(cache_key)
+    if cached and now - cached[0] < _GATEWAY_MODELS_TTL:
+        gateway_ids = cached[1]
+    else:
+        # 加锁去重：同一 cache_key 的并发请求只打一次网关
+        lock = _GATEWAY_MODELS_LOCKS.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            # 双检：拿到锁后再看一次缓存（可能前一个持锁者已写入）
+            cached = _GATEWAY_MODELS_CACHE.get(cache_key)
+            now = time.time()
+            if cached and now - cached[0] < _GATEWAY_MODELS_TTL:
+                gateway_ids = cached[1]
+            else:
+                try:
+                    gateway_ids = await fetch_anspire_chat_model_ids(api_key, endpoint)
+                    _GATEWAY_MODELS_CACHE[cache_key] = (now, gateway_ids)
+                except (AnspireConfigurationError, httpx.HTTPError, ValueError) as exc:
+                    logger.warning("anspire_gateway_models_fetch_failed error=%s", exc)
+                    return static_models
+
+    result: list[dict[str, object]] = []
+    for model in static_models:
+        if str(model.get("capability", "")) == "chat":
+            if str(model["id"]) in gateway_ids:
+                result.append(model)
+        else:
+            # non-chat 模型不依赖网关
+            result.append(model)
+    return result

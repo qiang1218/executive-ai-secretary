@@ -11,9 +11,11 @@ import os
 import secrets
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Mapping
+from zoneinfo import ZoneInfo
 
+from croniter import croniter
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -216,6 +218,149 @@ def requeue_expired_leases(*, session: Session) -> int:
     return getattr(result, "rowcount", 0)
 
 
+# --------------------------------------------------------------------------
+# Scheduled-task enqueueing
+# --------------------------------------------------------------------------
+
+def _compute_next_cron_run(
+    cron_expression: str, after: datetime, timezone_name: str
+) -> datetime | None:
+    """根据 cron 表达式计算 ``after`` 之后的下一次执行时间（UTC）。
+
+    返回 aware datetime；失败时返回 ``None``。
+    """
+    try:
+        tz = ZoneInfo(timezone_name)
+    except (KeyError, ValueError, LookupError):
+        tz = ZoneInfo("UTC")
+    localized = after.astimezone(tz) if after.tzinfo else after.replace(tzinfo=tz)
+    try:
+        cron = croniter(cron_expression, localized)
+    except (ValueError, KeyError):
+        return None
+    next_local = cron.get_next(datetime)
+    return next_local.astimezone(ZoneInfo("UTC"))
+
+
+def enqueue_due_scheduled_tasks(session: Session) -> int:
+    """把到期的 ScheduledTask 入队成 Job，推进 ``next_run_at``。
+
+    每条到期任务：
+    1. 用 ``ScheduleRun.window_key`` 去重（ISO 时间戳），同一窗口不重复入队；
+    2. 创建 ``Job(type="data.sync", status="queued")``，payload 与
+       ``data_source_service._enqueue_sync`` 对齐（``trigger_type="scheduled"``）；
+    3. 创建 ``ScheduleRun(status="enqueued")`` 关联 task / job；
+    4. 根据 cron 算出下次执行时间，UPDATE ``ScheduledTask.next_run_at`` /
+       ``last_enqueued_at``。
+
+    所有写入都在调用方的事务里完成，由调用方 commit。
+    """
+    from models.data_source import ScheduleRun, ScheduledTask
+    from sqlalchemy import select
+
+    now = utc_now()
+    due_tasks = (
+        session.scalars(
+            select(ScheduledTask).where(
+                ScheduledTask.is_enabled.is_(True),
+                ScheduledTask.next_run_at.is_not(None),
+                ScheduledTask.next_run_at <= now,
+            )
+        )
+    ).all()
+
+    enqueued = 0
+    for task in due_tasks:
+        scheduled_for = task.next_run_at
+        # window_key 用 UTC ISO 时间戳，保证同一调度窗口全局唯一
+        window_key = (
+            scheduled_for.astimezone(ZoneInfo("UTC")).isoformat()
+            if scheduled_for.tzinfo
+            else scheduled_for.replace(tzinfo=ZoneInfo("UTC")).isoformat()
+        )
+
+        # 同一窗口已入队过——只推进 next_run_at，不重复入队
+        existing = session.scalar(
+            select(ScheduleRun).where(
+                ScheduleRun.scheduled_task_id == task.id,
+                ScheduleRun.window_key == window_key,
+            )
+        )
+        if existing is not None:
+            next_at = _compute_next_cron_run(
+                task.cron_expression, scheduled_for, task.timezone
+            )
+            if next_at is not None:
+                task.next_run_at = next_at
+            continue
+
+        if task.data_source_id is None:
+            logger.warning(
+                "scheduled_task_skip_no_data_source task_id=%s key=%s",
+                task.id,
+                task.key,
+            )
+            continue
+
+        next_at = _compute_next_cron_run(
+            task.cron_expression, scheduled_for, task.timezone
+        )
+        if next_at is None:
+            logger.warning(
+                "scheduled_task_skip_invalid_cron task_id=%s cron=%s",
+                task.id,
+                task.cron_expression,
+            )
+            continue
+
+        job = Job(
+            enterprise_id=task.enterprise_id,
+            job_type="data.sync",
+            status="queued",
+            max_attempts=get_settings().worker_job_max_attempts,
+            payload_json={
+                "data_source_id": str(task.data_source_id),
+                "scheduled_task_id": str(task.id),
+                "trigger_type": "scheduled",
+                "validation_only": False,
+                "operation": "activate",
+                "activation_mode": "all_three_atomic",
+            },
+            scope_snapshot_json={
+                "enterprise_id": str(task.enterprise_id),
+            },
+            scheduled_at=now,
+        )
+        session.add(job)
+        session.flush()  # 取 job.id
+
+        session.add(
+            ScheduleRun(
+                scheduled_task_id=task.id,
+                enterprise_id=task.enterprise_id,
+                job_id=job.id,
+                window_key=window_key,
+                trigger_type="schedule",
+                status="enqueued",
+                scheduled_for=scheduled_for,
+                enqueued_at=now,
+            )
+        )
+
+        task.next_run_at = next_at
+        task.last_enqueued_at = now
+        enqueued += 1
+        logger.info(
+            "scheduled_task_enqueued task_id=%s job_id=%s window=%s next_run_at=%s",
+            task.id,
+            job.id,
+            window_key,
+            next_at.isoformat(),
+        )
+
+    return enqueued
+
+
 def claim_next_job(worker_id: str, *, session: Session) -> tuple[Job, str] | None:
     """Atomically pull the next queued job and acquire a lease.
 
@@ -404,6 +549,11 @@ class JobRunner:
             session.commit()
             if requeued:
                 logger.info("job_runner_requeued count=%d", requeued)
+
+            enqueued = enqueue_due_scheduled_tasks(session)
+            if enqueued:
+                logger.info("job_runner_scheduled_enqueued count=%d", enqueued)
+            session.commit()
 
             claim = claim_next_job(self._worker_id, session=session)
             if claim is None:

@@ -9,7 +9,8 @@ working/old hermes investigation:
   longer starts the runner and no production code imports them.
 * ``Settings.mcp_hub_url`` — single-line orphan field with no callers.
 * ``Settings.hermes_model_default`` — defaulted to ``qwen3.5-plus`` but
-  never read; ``main.py._run_worker`` writes ``HERMES_MODEL`` directly.
+  never read; the legacy ``main.py._run_worker`` env-var injection that
+  referenced it has since been removed (API Key 硬编码一并清理).
 
 Phase 4 (this commit) finishes the migration to MCP v2 by retiring the
 pre-MCP-v2 package entirely:
