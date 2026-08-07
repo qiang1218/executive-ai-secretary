@@ -5,6 +5,8 @@ import hashlib
 import json
 import re
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -14,6 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from exceptions.errors import AppError
 from models import HarnessConfigVersion
 from core.security import utc_now
+
+# 进程级 active harness 缓存(以 enterprise_id 为键),TTL 默认 60s。
+# chat 主路径每次 _send 都会调 active_harness_config,把这条单行 SQL
+# 缓存到内存里,可以避免每条消息都触发 ORM 实例化。变更由
+# update_harness_config / restore_harness_version 在 commit 后调
+# ``invalidate_active_harness_cache`` 主动失效。
+_ACTIVE_CACHE: dict[uuid.UUID, tuple[datetime, "ActiveHarnessPayload"]] = {}
+_ACTIVE_CACHE_TTL = timedelta(seconds=60)
 
 # MCP v2 通用工具：3 个白名单（discover_schema / query_schema / execute_query）。
 # agent 在 3 步模式下只会用到这三个名字；fast_rules.candidate_tools 必须落在
@@ -312,6 +322,55 @@ async def active_harness_config(db: AsyncSession, enterprise_id: uuid.UUID) -> H
     return row
 
 
+@dataclass(frozen=True)
+class ActiveHarnessPayload:
+    """``active_harness_config`` 的可缓存投影。直接暴露 ``HarnessConfigVersion``
+    ORM 对象会让 session 在跨请求 / 跨事件循环访问时崩,这里只保留业务字段副本。"""
+
+    id: uuid.UUID
+    version: int
+    schema_version: str
+    config_hash: str
+    config_json: dict[str, Any]
+    activated_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_row(cls, row: HarnessConfigVersion) -> "ActiveHarnessPayload":
+        return cls(
+            id=row.id,
+            version=row.version,
+            schema_version=row.schema_version,
+            config_hash=row.config_hash,
+            config_json=row.config_json,
+            activated_at=row.activated_at,
+            updated_at=row.updated_at,
+        )
+
+
+async def get_active_harness_payload(
+    db: AsyncSession, enterprise_id: uuid.UUID
+) -> ActiveHarnessPayload:
+    """带 60s 进程级缓存的 active harness 读取 — 命中时省一次 SQL + ORM 构造。"""
+
+    cached = _ACTIVE_CACHE.get(enterprise_id)
+    if cached is not None:
+        expires_at, payload = cached
+        if expires_at > utc_now():
+            return payload
+        _ACTIVE_CACHE.pop(enterprise_id, None)
+    row = await active_harness_config(db, enterprise_id)
+    payload = ActiveHarnessPayload.from_row(row)
+    _ACTIVE_CACHE[enterprise_id] = (utc_now() + _ACTIVE_CACHE_TTL, payload)
+    return payload
+
+
+def invalidate_active_harness_cache(enterprise_id: uuid.UUID) -> None:
+    """update / restore 提交后主动失效;允许下一次 chat 直接读到新版本。"""
+
+    _ACTIVE_CACHE.pop(enterprise_id, None)
+
+
 async def next_harness_version(db: AsyncSession, enterprise_id: uuid.UUID) -> int:
     return int(
         await db.scalar(
@@ -323,17 +382,73 @@ async def next_harness_version(db: AsyncSession, enterprise_id: uuid.UUID) -> in
     ) + 1
 
 
+def _prioritized_rules(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """以 ``(-priority, id)`` 稳定排序返回 ``fast_rules``。
+    优先级高的先匹配;同优先级按 id 字典序;与 ``validate_harness_config``
+    末尾的 sort 一致,这样匹配器自身不依赖写入路径的兜底顺序。"""
+
+    rules = config.get("fast_rules", []) or []
+    return sorted(
+        rules,
+        key=lambda rule: (
+            -int(rule.get("priority", 0) or 0),
+            str(rule.get("id", "")),
+        ),
+    )
+
+
+def _terms_match(terms: list[str], normalized: str, match_mode: str) -> bool:
+    matches = [value.casefold() in normalized for value in terms]
+    if not matches:
+        return False
+    return all(matches) if match_mode == "all" else any(matches)
+
+
 def match_fast_rule(question: str, config: dict[str, Any]) -> dict[str, Any] | None:
     normalized = question.casefold()
-    for rule in config.get("fast_rules", []):
+    for rule in _prioritized_rules(config):
         if not rule.get("enabled"):
             continue
         if any(value.casefold() in normalized for value in rule.get("exclusions", [])):
             continue
-        matches = [value.casefold() in normalized for value in rule.get("terms", [])]
-        if matches and (all(matches) if rule.get("match_mode") == "all" else any(matches)):
+        if _terms_match(rule.get("terms", []), normalized, rule.get("match_mode", "any")):
             return rule
     return None
+
+
+def explain_match(question: str, config: dict[str, Any]) -> dict[str, Any]:
+    """``match_fast_rule`` 的完整审计信息:返回 ``matched_rule_id``/``matched_rule``
+    和被跳过规则的 ``[{"id": ..., "reason": "..."}, ...]``。
+    reason 取值:``disabled`` / ``exclusion_hit`` / ``empty_terms`` /
+    ``terms_missed``。供 simulate / audit 记录,与原 ``match_fast_rule``
+    调用方保持隔离。
+    """
+
+    normalized = question.casefold()
+    matched: dict[str, Any] | None = None
+    skipped: list[dict[str, str]] = []
+    for rule in _prioritized_rules(config):
+        rule_id = str(rule.get("id", ""))
+        if not rule.get("enabled"):
+            skipped.append({"id": rule_id, "reason": "disabled"})
+            continue
+        exclusions = rule.get("exclusions", []) or []
+        if any(value.casefold() in normalized for value in exclusions):
+            skipped.append({"id": rule_id, "reason": "exclusion_hit"})
+            continue
+        terms = rule.get("terms", []) or []
+        if not terms:
+            skipped.append({"id": rule_id, "reason": "empty_terms"})
+            continue
+        if _terms_match(terms, normalized, rule.get("match_mode", "any")):
+            matched = rule
+            break
+        skipped.append({"id": rule_id, "reason": "terms_missed"})
+    return {
+        "matched_rule_id": str(matched["id"]) if matched else None,
+        "matched_rule": matched,
+        "skipped_rule_ids": skipped,
+    }
 
 
 def apply_glossary(question: str, config: dict[str, Any]) -> str:

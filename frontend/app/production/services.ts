@@ -397,6 +397,26 @@ export function createProductionServices(client: ApiClient = apiClient) {
         method: "POST",
       });
     },
+    async listCandidates() {
+      return client.request<McpSchemaCandidateList>(
+        "/admin/mcp-schemas/candidates",
+      );
+    },
+    async register(
+      tableName: string,
+      overrides?: { is_enabled?: boolean; max_rows?: number; query_timeout_seconds?: number },
+    ) {
+      return client.request<McpSchemaRecord>(
+        `/admin/mcp-schemas/register/${encodeURIComponent(tableName)}`,
+        { method: "POST", body: overrides ?? {} },
+      );
+    },
+    async unregister(tableName: string) {
+      return client.request<McpSchemaDeleteOut>(
+        `/admin/mcp-schemas/unregister/${encodeURIComponent(tableName)}`,
+        { method: "POST" },
+      );
+    },
   };
   // ───────────────────────────────────────────────────────
 
@@ -463,10 +483,20 @@ export function createProductionServices(client: ApiClient = apiClient) {
     async restore(versionId: string) {
       return client.request<HarnessConfig>(`/admin/harness/versions/${encodeURIComponent(versionId)}/restore`, { method: "POST" });
     },
-    async simulate(question: string, config: HarnessBusinessConfig, organizationScope?: OrganizationScope) {
+    async simulate(
+      question: string,
+      config: HarnessBusinessConfig,
+      organizationScope?: OrganizationScope,
+      forcedRuleId?: string | null,
+    ) {
       return client.request<HarnessSimulation>("/admin/harness/simulate", {
         method: "POST",
-        body: { question, config, organization_scope: organizationScope },
+        body: {
+          question,
+          config,
+          organization_scope: organizationScope,
+          ...(forcedRuleId ? { forced_rule_id: forcedRuleId } : {}),
+        },
       });
     },
     async metrics(days = 30) {

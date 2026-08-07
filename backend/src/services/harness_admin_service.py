@@ -11,13 +11,47 @@ from collections import Counter, defaultdict
 from datetime import timedelta
 from typing import Any
 
+from dataclasses import dataclass
+
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from configs.settings import Settings
 from core.security import utc_now
 from exceptions.errors import AppError
+
+
+@dataclass(frozen=True)
+class _SimulationErrorRouting:
+    status_code: int
+    code: str
+
+
+# worker 端 ``HermesRunError.code`` -> simulate_harness 的最终 HTTP 状态/错误码
+# 映射表。不在表里的 code 走兜底(502 harness_route_anspire_unknown)。
+# 401/403 配置问题用 502 因为不应该让 admin 看到模型机密错而是"配置错"。
+_HARNESS_SIMULATION_ERROR_MAP: dict[str, _SimulationErrorRouting] = {
+    "anspire_invalid_key": _SimulationErrorRouting(502, "harness_route_anspire_invalid_key"),
+    "anspire_forbidden": _SimulationErrorRouting(502, "harness_route_anspire_forbidden"),
+    "anspire_model_unavailable": _SimulationErrorRouting(502, "harness_route_anspire_model_unavailable"),
+    "anspire_rate_limited": _SimulationErrorRouting(503, "harness_route_anspire_rate_limited"),
+    "anspire_timeout": _SimulationErrorRouting(504, "harness_route_anspire_timeout"),
+    "anspire_request_too_large": _SimulationErrorRouting(413, "harness_route_anspire_request_too_large"),
+    "anspire_invalid_request": _SimulationErrorRouting(502, "harness_route_anspire_invalid_request"),
+    "anspire_request_invalid": _SimulationErrorRouting(502, "harness_route_anspire_invalid_request"),
+    "anspire_upstream_error": _SimulationErrorRouting(502, "harness_route_anspire_upstream"),
+    "anspire_request_rejected": _SimulationErrorRouting(502, "harness_route_anspire_request_rejected"),
+    "anspire_invalid_response": _SimulationErrorRouting(502, "harness_route_anspire_invalid_response"),
+    "anspire_no_choices": _SimulationErrorRouting(502, "harness_route_anspire_no_choices"),
+    "anspire_empty_completion": _SimulationErrorRouting(502, "harness_route_anspire_empty_completion"),
+    "anspire_completion_truncated": _SimulationErrorRouting(502, "harness_route_anspire_truncated"),
+    "anspire_completion_refused": _SimulationErrorRouting(502, "harness_route_anspire_refused"),
+    "harness_worker_invalid_response": _SimulationErrorRouting(502, "harness_route_worker_invalid"),
+    "harness_unauthorized": _SimulationErrorRouting(401, "harness_worker_unauthorized"),
+    "harness_simulation_failed": _SimulationErrorRouting(502, "harness_route_anspire_unknown"),
+}
+
 from models import (
     HarnessConfigVersion,
     HarnessDiagnosticGrant,
@@ -49,10 +83,13 @@ from services.harness_config import (
     active_harness_config,
     apply_glossary,
     config_hash,
+    explain_match,
+    invalidate_active_harness_cache,
     match_fast_rule,
     next_harness_version,
     validate_harness_config,
 )
+from services.hermes_client import HermesClientError
 from services.query_spec import normalize_query_spec
 
 
@@ -246,6 +283,15 @@ class HarnessAdminService:
         request: Request,
     ) -> HarnessConfigOut:
         db = self._session
+        # 把"读 current / 取下一 version / 写新行"三步放进同一 advisory lock,
+        # 避免两个管理员同时更新拿到相同的 max(version)+1 后触发唯一约束冲突,
+        # 比靠 IntegrityError 兜底返回 409 的体验更直接。SQLite 测试环境无
+        # ``pg_advisory_xact_lock`` 函数,跳过即可(PG 才是 prod 走的 dialect)。
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+                {"scope": f"harness:{principal.enterprise_id}"},
+            )
         # MCP v2 后，``candidate_tools`` 只接受 {discover_schema, query_schema,
         # execute_query} 这套通用工具名；validate_harness_config 的默认
         # ``allowed_tools`` 已经覆盖。
@@ -297,6 +343,7 @@ class HarnessAdminService:
         )
         await db.commit()
         await db.refresh(row)
+        invalidate_active_harness_cache(principal.enterprise_id)
         return self._config_out(row)
 
     async def list_harness_versions(
@@ -321,6 +368,11 @@ class HarnessAdminService:
         request: Request,
     ) -> HarnessConfigOut:
         db = self._session
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+                {"scope": f"harness:{principal.enterprise_id}"},
+            )
         source = await db.scalar(
             select(HarnessConfigVersion).where(
                 HarnessConfigVersion.id == version_id,
@@ -365,6 +417,7 @@ class HarnessAdminService:
         )
         await db.commit()
         await db.refresh(row)
+        invalidate_active_harness_cache(principal.enterprise_id)
         return self._config_out(row)
 
     async def simulate_harness(
@@ -380,9 +433,32 @@ class HarnessAdminService:
         scope, resolved_ids = await self._simulation_scope(
             principal.enterprise_id, payload.organization_scope
         )
-        rule = match_fast_rule(payload.question, config)
-        route = str(rule["route"]) if rule else ""
-        route_source = "fast_rule" if rule else "hermes"
+        # forced_rule_id 用于 admin 调试:跳过 match_fast_rule 自动选择,
+        # 强制按规则书中的某一条走整条 simulate 流程,并把这次入口记为
+        # route_source="forced",返回时也回传 skipped_rule_ids 给前端。
+        rule: dict[str, Any] | None = None
+        route_source = "hermes"
+        forced_target: dict[str, Any] | None = None
+        match_detail = explain_match(payload.question, config)
+        if payload.forced_rule_id:
+            for candidate in config.get("fast_rules", []):
+                if candidate.get("id") == payload.forced_rule_id and candidate.get("enabled"):
+                    forced_target = candidate
+                    break
+            if forced_target is None:
+                raise AppError(
+                    404,
+                    "harness_rule_not_found",
+                    f"fast_rule {payload.forced_rule_id!s} 不存在或未启用",
+                )
+            rule = forced_target
+            route = str(rule["route"])
+            route_source = "forced"
+        else:
+            rule = match_fast_rule(payload.question, config)
+            route = str(rule["route"]) if rule else ""
+            route_source = "fast_rule" if rule else "hermes"
+        skipped = [s["id"] for s in match_detail["skipped_rule_ids"]]
         model_config = await model_config_repo.find_active(db, principal.enterprise_id)
         if model_config is None:
             raise AppError(409, "anspire_not_configured", "请先配置并启用 Anspire 模型")
@@ -424,6 +500,7 @@ class HarnessAdminService:
                     model_id=provider["model_id"],
                 )
                 rewrite_data = _parse_json_response(response["text"])
+                print(rewrite_data)
                 query_spec = normalize_query_spec(
                     rewrite_data,
                     question=rewritten_question,
@@ -434,8 +511,24 @@ class HarnessAdminService:
                 )
         except AnspireConfigurationError as exc:
             raise AppError(422, exc.code, str(exc)) from exc
+        except HermesClientError as exc:
+            # 按 worker code 分流最终 HTTP code,而不是一律 422
+            # ``harness_simulation_failed`` 是为 worker 没传 code 时兜底。
+            downstream = _HARNESS_SIMULATION_ERROR_MAP.get(
+                exc.code,
+                _SimulationErrorRouting(status_code=502, code="harness_route_anspire_unknown"),
+            )
+            raise AppError(
+                downstream.status_code,
+                downstream.code,
+                str(exc),
+            ) from exc
         except RuntimeError as exc:
-            raise AppError(422, "harness_simulation_failed", str(exc)) from exc
+            # 兜底：Anspire 客户端在截获到 AnspireConfigurationError 之外
+            # 抛出的场景（譬如 httpx 路径异常）保持原状。
+            raise AppError(
+                502, "harness_route_anspire_unknown", str(exc)
+            ) from exc
 
         # MCP v2 的 3 个通用工具始终启用；先前通过 ``effective_catalog`` 过滤
         # ``is_enabled`` / ``planner_enabled`` 标志的逻辑不再适用。
@@ -457,6 +550,12 @@ class HarnessAdminService:
                 "route_source": route_source,
                 "scope_count": len(resolved_ids),
                 "config_hash": config_hash(config),
+                "matched_rule_id": match_detail["matched_rule_id"],
+                "skipped_rule_ids": [s["id"] for s in match_detail["skipped_rule_ids"]],
+                "skipped_reasons": [
+                    {"id": s["id"], "reason": s["reason"]}
+                    for s in match_detail["skipped_rule_ids"]
+                ],
             },
         )
         await db.commit()
@@ -468,6 +567,7 @@ class HarnessAdminService:
             query_spec=query_spec,
             validation_issues=issues,
             config_hash=config_hash(config),
+            skipped_rule_ids=skipped,
         )
 
     async def harness_metrics(
@@ -505,6 +605,17 @@ class HarnessAdminService:
             if row.latency_ms is not None:
                 stage_latencies[row.stage].append(row.latency_ms)
         execution = [row for row in stages if row.stage == "mcp_execution"]
+        # 按 ``matched_rule_id`` group by,只在 ``route_source == "fast_rule"``
+        # 时计数;``created_at`` 取最大值以便前端展示"上次命中时间"。
+        rule_hit_counts: Counter[str] = Counter()
+        last_rule_hit_at: dict[str, datetime] = {}
+        for row in routes:
+            if row.route_source != "fast_rule" or not row.matched_rule_id:
+                continue
+            rule_hit_counts[row.matched_rule_id] += 1
+            current = last_rule_hit_at.get(row.matched_rule_id)
+            if current is None or row.created_at > current:
+                last_rule_hit_at[row.matched_rule_id] = row.created_at
         return HarnessMetricsOut(
             window_days=days,
             message_count=len(routes),
@@ -524,6 +635,8 @@ class HarnessAdminService:
             stage_latency_p95_ms={
                 stage: _p95(values) for stage, values in stage_latencies.items()
             },
+            rule_hit_counts=dict(rule_hit_counts),
+            last_rule_hit_at=last_rule_hit_at,
         )
 
     async def list_harness_traces(

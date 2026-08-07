@@ -17,11 +17,16 @@ from sqlalchemy.orm import selectinload
 from models.config import McpSchemaRegistry
 from schemas.mcp_schema import (
     McpColumnSchema,
+    McpSchemaCandidateListOut,
+    McpSchemaCandidateOut,
     McpSchemaCatalogOut,
+    McpSchemaDeleteOut,
     McpSchemaOut,
     McpSchemaRefreshOut,
+    McpSchemaRegisterIn,
     McpSchemaUpdate,
 )
+from exceptions.errors import AppError
 from services.authz import Principal
 
 logger = logging.getLogger(__name__)
@@ -149,6 +154,116 @@ class McpSchemaService:
         await self._session.refresh(row)
         return _to_out(row)
 
+    # ── 注册 / 注销 ──────────────────────────────────────
+
+    async def list_candidates(self, principal: Principal) -> McpSchemaCandidateListOut:
+        """列出 ``BUILTIN_TABLES`` 中尚未在企业名下注册的物理表。
+        前端用这张候选清单完成"勾选注册"的工作流。
+        """
+
+        result = await self._session.execute(
+            select(McpSchemaRegistry.table_name).where(
+                McpSchemaRegistry.enterprise_id == principal.enterprise_id,
+            )
+        )
+        registered = set(result.scalars().all())
+        candidates = [
+            McpSchemaCandidateOut(
+                table_name=spec["table_name"],
+                display_name=spec["display_name"],
+                description=spec["description"],
+                category=spec["category"],
+            )
+            for spec in BUILTIN_TABLES
+            if spec["table_name"] not in registered
+        ]
+        return McpSchemaCandidateListOut(candidates=candidates, total=len(candidates))
+
+    async def register_table(
+        self,
+        table_name: str,
+        payload: McpSchemaRegisterIn | None,
+        principal: Principal,
+    ) -> McpSchemaOut:
+        """从 ``BUILTIN_TABLES`` 注册一条表。重复注册/不在内置清单内的表名都拒绝。
+
+        ``payload`` 是可选覆盖项,``is_enabled`` 默认 ``True``,``max_rows`` 默认
+        ``100``,``query_timeout_seconds`` 默认 ``10``。
+        """
+
+        spec = next((t for t in BUILTIN_TABLES if t["table_name"] == table_name), None)
+        if spec is None:
+            raise AppError(
+                404,
+                "mcp_table_not_in_registry",
+                f"表 {table_name!r} 不在候选清单内",
+            )
+        result = await self._session.execute(
+            select(McpSchemaRegistry).where(
+                McpSchemaRegistry.enterprise_id == principal.enterprise_id,
+                McpSchemaRegistry.table_name == table_name,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            raise AppError(
+                409,
+                "mcp_table_already_registered",
+                f"表 {table_name!r} 已被注册过",
+            )
+        is_enabled = True if payload is None or payload.is_enabled is None else payload.is_enabled
+        max_rows = 100 if payload is None or payload.max_rows is None else payload.max_rows
+        query_timeout = (
+            10
+            if payload is None or payload.query_timeout_seconds is None
+            else payload.query_timeout_seconds
+        )
+        now = datetime.datetime.now(datetime.timezone.utc)
+        row = McpSchemaRegistry(
+            enterprise_id=principal.enterprise_id,
+            table_name=spec["table_name"],
+            display_name=spec["display_name"],
+            description=spec["description"],
+            category=spec["category"],
+            is_enabled=is_enabled,
+            max_rows=max_rows,
+            query_timeout_seconds=query_timeout,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(row)
+        await self._session.commit()
+        await self._session.refresh(row)
+        return _to_out(row)
+
+    async def unregister_table(
+        self,
+        table_name: str,
+        principal: Principal,
+    ) -> McpSchemaDeleteOut:
+        """注销企业名下某张表(只删 mcp_schema_registry 行,不碰物理表)。
+
+        业务规则:核心表(category=='core')/启用的表,在有审计记录的情况下
+        仍然允许注销,以保证 admin 撤销误注册的能力;审计会记录事件。
+        """
+
+        result = await self._session.execute(
+            select(McpSchemaRegistry).where(
+                McpSchemaRegistry.enterprise_id == principal.enterprise_id,
+                McpSchemaRegistry.table_name == table_name,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise AppError(
+                404,
+                "mcp_table_not_registered",
+                f"表 {table_name!r} 当前未在企业名下注册",
+            )
+        await self._session.delete(row)
+        await self._session.commit()
+        return McpSchemaDeleteOut(table_name=table_name, deleted=True, message="已注销")
+
     # ── Schema 刷新 ───────────────────────────────────────
 
     async def refresh_schema(
@@ -270,45 +385,44 @@ class McpSchemaService:
 # ── 模块级工具函数 ────────────────────────────────────────
 
 async def _discover_columns(session: AsyncSession, table_name: str) -> list[dict]:
-    """通过 SQLAlchemy Inspector 自动发现表结构。"""
-    from sqlalchemy import inspect
+    """通过 SQLAlchemy Inspector 自动发现表结构。
 
-    conn = await session.connection()
-    engine = conn.engine
-    # 获取同步引擎以运行 inspect
-    sync_engine = engine.sync_engine if hasattr(engine, "sync_engine") else engine
-    try:
-        insp = inspect(sync_engine)
-        columns = insp.get_columns(table_name)
-        pk = insp.get_pk_constraint(table_name)
-        fks = insp.get_foreign_keys(table_name)
-    except Exception:
-        # 如果 sync_engine 不可用，尝试直接通过 async engine
-        insp = inspect(engine)
+    在 AsyncEngine 下必须用 ``conn.run_sync`` 把 inspect 放到同步上下文里
+    执行；直接对 AsyncEngine 或其 ``sync_engine`` 调 ``inspect`` 会抛
+    "Inspection on an AsyncEngine is currently not supported"。
+    """
+    def _do_discover(sync_conn) -> list[dict]:
+        from sqlalchemy import inspect
+        # AsyncConnection.run_sync 传入的是 sync Connection，可直接 inspect
+        insp = inspect(sync_conn)
         columns = insp.get_columns(table_name)
         pk = insp.get_pk_constraint(table_name)
         fks = insp.get_foreign_keys(table_name)
 
-    pk_columns = set(pk.get("constrained_columns", []))
-    fk_map: dict[str, dict[str, str]] = {}
-    for fk in fks:
-        for col in fk.get("constrained_columns", []):
-            fk_map[col] = {
-                "table": fk.get("referred_table", ""),
-                "column": fk.get("referred_columns", [""])[0],
+        pk_columns = set(pk.get("constrained_columns", []))
+        fk_map: dict[str, dict[str, str]] = {}
+        for fk in fks:
+            for col in fk.get("constrained_columns", []):
+                fk_map[col] = {
+                    "table": fk.get("referred_table", ""),
+                    "column": (fk.get("referred_columns") or [""])[0],
+                }
+
+        return [
+            {
+                "name": col["name"],
+                "type": str(col["type"]),
+                "nullable": col.get("nullable", True),
+                "comment": col.get("comment") or "",
+                "is_primary_key": col["name"] in pk_columns,
+                "references": fk_map.get(col["name"]),
             }
+            for col in columns
+        ]
 
-    return [
-        {
-            "name": col["name"],
-            "type": str(col["type"]),
-            "nullable": col.get("nullable", True),
-            "comment": col.get("comment") or "",
-            "is_primary_key": col["name"] in pk_columns,
-            "references": fk_map.get(col["name"]),
-        }
-        for col in columns
-    ]
+    # 用 AsyncConnection.run_sync 确保回调收到的是 sync Connection
+    conn = await session.connection()
+    return await conn.run_sync(_do_discover)
 
 
 async def _fetch_sample_rows(

@@ -221,25 +221,39 @@ async def _call_llm_once(
             raise HermesRunError(
                 "Anspire 拒绝了该凭证，请确认 API Key 有效且已开通所选模型",
                 status_code=response.status_code,
+                code={
+                    401: "anspire_invalid_key",
+                    403: "anspire_forbidden",
+                }[response.status_code],
             )
         if response.status_code == 404:
             raise HermesRunError(
                 "所选 Anspire 模型暂不可用，请重新选择模型后测试",
                 status_code=response.status_code,
+                code="anspire_model_unavailable",
             )
         if response.status_code == 429:
             raise HermesRunError(
                 "Anspire 当前限流或账户额度不足，请稍后重试并检查账户状态",
                 status_code=response.status_code,
+                code="anspire_rate_limited",
+            )
+        if response.status_code == 408:
+            raise HermesRunError(
+                "Anspire 网关处理超时",
+                status_code=response.status_code,
+                code="anspire_timeout",
             )
         if response.status_code >= 500:
             raise HermesRunError(
                 "Anspire 网关暂时不可用，请稍后重试",
                 status_code=response.status_code,
+                code="anspire_upstream_error",
             )
         raise HermesRunError(
             "Anspire 连接测试未通过，请检查凭证与模型权限",
             status_code=response.status_code,
+            code="anspire_request_rejected",
         )
     try:
         return response.json()
@@ -247,6 +261,7 @@ async def _call_llm_once(
         raise HermesRunError(
             "Anspire returned an invalid response",
             status_code=502,
+            code="anspire_invalid_response",
         ) from exc
 
 
@@ -351,25 +366,39 @@ def _call_llm_once_sync(
             raise HermesRunError(
                 "Anspire 拒绝了该凭证，请确认 API Key 有效且已开通所选模型",
                 status_code=response.status_code,
+                code={
+                    401: "anspire_invalid_key",
+                    403: "anspire_forbidden",
+                }[response.status_code],
             )
         if response.status_code == 404:
             raise HermesRunError(
                 "所选 Anspire 模型暂不可用，请重新选择模型后测试",
                 status_code=response.status_code,
+                code="anspire_model_unavailable",
             )
         if response.status_code == 429:
             raise HermesRunError(
                 "Anspire 当前限流或账户额度不足，请稍后重试并检查账户状态",
                 status_code=response.status_code,
+                code="anspire_rate_limited",
+            )
+        if response.status_code == 408:
+            raise HermesRunError(
+                "Anspire 网关处理超时",
+                status_code=response.status_code,
+                code="anspire_timeout",
             )
         if response.status_code >= 500:
             raise HermesRunError(
                 "Anspire 网关暂时不可用，请稍后重试",
                 status_code=response.status_code,
+                code="anspire_upstream_error",
             )
         raise HermesRunError(
             "Anspire 连接测试未通过，请检查凭证与模型权限",
             status_code=response.status_code,
+            code="anspire_request_rejected",
         )
     try:
         return response.json()
@@ -377,22 +406,67 @@ def _call_llm_once_sync(
         raise HermesRunError(
             "Anspire returned an invalid response",
             status_code=502,
+            code="anspire_invalid_response",
         ) from exc
 
 
 def _extract_text(response_body: dict[str, Any]) -> tuple[str, int | None, int | None]:
     choices = response_body.get("choices") or []
     if not isinstance(choices, list) or not choices:
-        raise HermesRunError("Anspire response does not contain choices", status_code=502)
+        logger.error(
+            "anspire.empty_choices body=%s",
+            _safe_log_body(response_body),
+        )
+        raise HermesRunError(
+            "Anspire response does not contain choices",
+            status_code=502,
+            code="anspire_no_choices",
+        )
     first = choices[0] or {}
     message = first.get("message") or {}
     text = str(message.get("content") or "").strip()
     if not text:
-        raise HermesRunError("Anspire returned an empty completion", status_code=502)
+        finish_reason = first.get("finish_reason")
+        refusal = message.get("refusal") if isinstance(message, dict) else None
+        logger.error(
+            "anspire.empty_completion finish_reason=%s refusal=%s body=%s",
+            finish_reason,
+            refusal,
+            _safe_log_body(response_body),
+        )
+        if finish_reason == "length":
+            raise HermesRunError(
+                "Anspire 输出被截断（finish_reason=length），prompt 或预算过大",
+                status_code=502,
+                code="anspire_completion_truncated",
+            )
+        if refusal:
+            raise HermesRunError(
+                f"Anspire 拒答：{refusal}",
+                status_code=502,
+                code="anspire_completion_refused",
+            )
+        raise HermesRunError(
+            "Anspire returned an empty completion",
+            status_code=502,
+            code="anspire_empty_completion",
+        )
     usage = response_body.get("usage") or {}
     in_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
     out_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
     return text, in_tokens, out_tokens
+
+
+def _safe_log_body(body: dict[str, Any], limit: int = 1500) -> str:
+    """把 ``response_body`` 序列化为日志字符串，长度截断并脱敏。
+    ``choices[*].message.content`` 之外不带敏感字段，但仍截断以防日志膨胀。
+    """
+
+    try:
+        cleaned = json.dumps(body, ensure_ascii=False, default=str)[:limit]
+    except (TypeError, ValueError):
+        cleaned = repr(body)[:limit]
+    return cleaned
 
 
 # Security kernel placeholder is provided via build_profile_prompt itself;

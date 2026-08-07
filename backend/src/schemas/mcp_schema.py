@@ -80,6 +80,46 @@ class McpSchemaUpdate(BaseModel):
     query_timeout_seconds: int | None = Field(default=None, ge=1, le=60)
 
 
+# ── 注册/注销流程 ─────────────────────────────────────────
+
+class McpSchemaCandidateOut(BaseModel):
+    """可注册的候选物理表（来自 ``BUILTIN_TABLES`` 但当前未在企业名下注册）。"""
+
+    table_name: str
+    display_name: str
+    description: str
+    category: str
+
+
+class McpSchemaCandidateListOut(BaseModel):
+    """候选物理表列表输出。"""
+
+    candidates: list[McpSchemaCandidateOut]
+    total: int
+
+
+class McpSchemaRegisterIn(BaseModel):
+    """注册新表的可选覆盖字段。``table_name`` 走 URL 路径,这里只允许改
+    默认 ``is_enabled`` / ``max_rows`` / ``query_timeout_seconds``。"""
+
+    model_config = {
+        "extra": "forbid",
+        "from_attributes": True,
+    }
+
+    is_enabled: bool | None = Field(default=None, description="注册后是否直接启用")
+    max_rows: int | None = Field(default=None, ge=1, le=1000)
+    query_timeout_seconds: int | None = Field(default=None, ge=1, le=60)
+
+
+class McpSchemaDeleteOut(BaseModel):
+    """注销结果。"""
+
+    table_name: str
+    deleted: bool
+    message: str = Field(default="已注销")
+
+
 # ── 刷新结果 ──────────────────────────────────────────────
 
 class McpSchemaRefreshOut(BaseModel):

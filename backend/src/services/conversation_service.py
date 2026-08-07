@@ -66,7 +66,12 @@ from services.conversation_scope import (
     scope_snapshot,
     set_conversation_scope,
 )
-from services.harness_config import active_harness_config, compose_chat_system_prompt
+from services.harness_config import (
+    active_harness_config,
+    compose_chat_system_prompt,
+    get_active_harness_payload,
+    invalidate_active_harness_cache,
+)
 from services.idempotency import replay, save_response
 from services.model_authorization import authorized_model_rows, resolve_authorized_model
 
@@ -518,7 +523,7 @@ class ConversationService:
         normalized_scope, resolved_scope_ids = await normalize_scope(
             self._session, principal, requested_scope
         )
-        active_harness = await active_harness_config(
+        active_harness = await get_active_harness_payload(
             self._session, principal.enterprise_id
         )
         requested_model_id = await resolve_authorized_model(

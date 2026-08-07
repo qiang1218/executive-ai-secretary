@@ -14,13 +14,49 @@ from api.deps import (
     PrincipalDep,
 )
 from schemas.mcp_schema import (
+    McpSchemaCandidateListOut,
     McpSchemaCatalogOut,
+    McpSchemaDeleteOut,
     McpSchemaOut,
     McpSchemaRefreshOut,
+    McpSchemaRegisterIn,
     McpSchemaUpdate,
 )
 
 router = APIRouter(prefix="/admin/mcp-schemas", tags=["admin-mcp-schemas"])
+
+
+@router.get("/candidates", response_model=McpSchemaCandidateListOut)
+async def list_candidates(
+    principal: PrincipalDep,
+    service: McpSchemaServiceDep,
+):
+    """候选物理表列表(BUILTIN_TABLES - 已注册表),用于"勾选注册"工作流。"""
+
+    return await service.list_candidates(principal)
+
+
+@router.post("/register/{table_name}", response_model=McpSchemaOut, status_code=201)
+async def register_schema(
+    payload: McpSchemaRegisterIn | None = None,
+    table_name: str = Path(description="物理表名"),
+    principal: PrincipalDep = ...,
+    service: McpSchemaServiceDep = ...,
+):
+    """注册一张新的物理表(从 BUILTIN_TABLES 模板创建 McpSchemaRegistry 行)。"""
+
+    return await service.register_table(table_name, payload, principal)
+
+
+@router.post("/unregister/{table_name}", response_model=McpSchemaDeleteOut)
+async def unregister_schema(
+    table_name: str = Path(description="物理表名"),
+    principal: PrincipalDep = ...,
+    service: McpSchemaServiceDep = ...,
+):
+    """注销某张表(只删 mcp_schema_registry 行,不删除物理表)。"""
+
+    return await service.unregister_table(table_name, principal)
 
 
 @router.get("", response_model=McpSchemaCatalogOut)

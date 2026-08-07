@@ -140,12 +140,13 @@ export type HarnessVersion = {
 
 export type HarnessSimulation = {
   route: "data" | "general" | "clarification";
-  route_source: "fast_rule" | "hermes" | "validation";
+  route_source: "fast_rule" | "hermes" | "validation" | "forced";
   matched_rule_id: string | null;
   candidate_tools: string[];
   query_spec: Record<string, unknown>;
   validation_issues: string[];
   config_hash: string;
+  skipped_rule_ids: string[];
 };
 
 export type HarnessMetrics = {
@@ -156,6 +157,8 @@ export type HarnessMetrics = {
   tool_success_rate: number;
   route_counts: Record<string, number>;
   stage_latency_p95_ms: Record<string, number>;
+  rule_hit_counts: Record<string, number>;
+  last_rule_hit_at: Record<string, string>;
 };
 
 export type HarnessTrace = {
@@ -450,6 +453,30 @@ export type McpSchemaRefreshOut = {
   columns_discovered: number;
   refreshed_at: string;
   error: string | null;
+};
+
+export type McpSchemaCandidate = {
+  table_name: string;
+  display_name: string;
+  description: string;
+  category: string;
+};
+
+export type McpSchemaCandidateList = {
+  candidates: McpSchemaCandidate[];
+  total: number;
+};
+
+export type McpSchemaRegisterIn = {
+  is_enabled?: boolean | null;
+  max_rows?: number | null;
+  query_timeout_seconds?: number | null;
+};
+
+export type McpSchemaDeleteOut = {
+  table_name: string;
+  deleted: boolean;
+  message: string;
 };
 
 // ─────────────────────────────────────────────────────────

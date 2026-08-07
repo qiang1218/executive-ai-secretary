@@ -1,13 +1,16 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { humanizeApiError } from "./api-client";
 import { productionServices } from "./services";
 import type {
   AdminModelAuthorization,
   AdminModelCatalog,
+  McpSchemaCandidate,
   McpSchemaCatalog,
+  McpSchemaDeleteOut,
   McpSchemaRecord,
+  McpSchemaRegisterIn,
   McpSchemaUpdate,
   McpSchemaRefreshOut,
   ModelProviderConfig,
@@ -34,6 +37,20 @@ export function ModelProviderPanel() {
   const [notice, setNotice] = useState("");
   const [modelSearch, setModelSearch] = useState("");
   const [modelView, setModelView] = useState<"all" | "authorized" | "pending">("all");
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "failed" | "info" } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
+
+  const showToast = (message: string, tone: "success" | "failed" | "info" = "success") => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message, tone });
+    toastTimer.current = setTimeout(() => setToast(null), 1000);
+  };
 
   useEffect(() => {
     let active = true;
@@ -91,9 +108,14 @@ export function ModelProviderPanel() {
     try {
       const result = await productionServices.adminModels.testModel(model.model_id);
       await reload();
-      setNotice(`${model.display_name} 测试通过，${result.latency_ms} ms。现在可以授权给董事长。`);
+      showToast(
+        `${model.display_name} · 通过 ${result.latency_ms ?? "—"} ms`,
+        "success",
+      );
     } catch (testError) {
-      setError(humanizeApiError(testError));
+      const message = humanizeApiError(testError);
+      setError(message);
+      showToast(`${model.display_name} · ${message}`, "failed");
       await reload();
     } finally {
       setBusy(null);
@@ -141,15 +163,48 @@ export function ModelProviderPanel() {
     : catalog?.models.some((item) => item.is_authorized)
       ? { label: `${catalog.models.filter((item) => item.is_authorized).length} 个模型已授权`, tone: "positive" }
       : { label: "等待模型授权", tone: "attention" };
-  const visibleModels = (catalog?.models ?? [])
-    .filter((model) => model.selectable)
-    .filter((model) => modelView === "all"
-      || (modelView === "authorized" ? model.is_authorized : !model.is_authorized))
-    .filter((model) => {
-      const query = modelSearch.trim().toLocaleLowerCase("zh-CN");
-      return !query || [model.display_name, model.name, model.family, model.model_id]
-        .some((value) => value.toLocaleLowerCase("zh-CN").includes(query));
-    });
+  const visibleModels = useMemo(
+    () =>
+      (catalog?.models ?? [])
+        .filter((model) => model.selectable)
+        .filter((model) =>
+          modelView === "all"
+            ? true
+            : modelView === "authorized"
+              ? model.is_authorized
+              : !model.is_authorized,
+        )
+        .filter((model) => {
+          const query = modelSearch.trim().toLocaleLowerCase("zh-CN");
+          if (!query) return true;
+          return [model.display_name, model.name, model.family, model.model_id].some(
+            (value) => value.toLocaleLowerCase("zh-CN").includes(query),
+          );
+        }),
+    [catalog, modelView, modelSearch],
+  );
+
+  // 按 family 聚合同系列模型(GPT/GLM/Claude … 同 column 排布)
+  const groupedModels = useMemo(() => {
+    const buckets = new Map<string, AdminModelAuthorization[]>();
+    for (const model of visibleModels) {
+      const key = model.family || "未分类";
+      const list = buckets.get(key);
+      if (list) list.push(model);
+      else buckets.set(key, [model]);
+    }
+    // 稳定顺序:GPT → GLM → Claude → … → 未分类,其余按字典序
+    const order = (family: string): number => {
+      const index = ["GPT", "GLM", "Claude"].indexOf(family);
+      return index === -1 ? 1000 + Array.from(buckets.keys()).indexOf(family) : index;
+    };
+    return Array.from(buckets.entries())
+      .sort(([a], [b]) => {
+        const diff = order(a) - order(b);
+        return diff !== 0 ? diff : a.localeCompare(b, "zh-CN");
+      })
+      .map(([family, items]) => ({ family, items }));
+  }, [visibleModels]);
 
   return (
     <main className="production-admin-main">
@@ -180,11 +235,60 @@ export function ModelProviderPanel() {
       <section className="admin-model-authorization">
         <header><div><small>董事长可用模型</small><h2>测试与授权</h2><p>只有使用当前凭证测试成功的模型，才允许出现在董事长工作台。</p></div><span>{catalog?.credential_version ? `凭证版本 v${catalog.credential_version}` : "等待配置"}</span></header>
         {catalog && <div className="admin-model-directory-controls"><label><span className="sr-only">搜索模型</span><input type="search" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="搜索模型名称、系列或 ID" /></label><div role="group" aria-label="模型目录筛选"><button type="button" className={modelView === "all" ? "active" : ""} onClick={() => setModelView("all")}>全部</button><button type="button" className={modelView === "authorized" ? "active" : ""} onClick={() => setModelView("authorized")}>已授权</button><button type="button" className={modelView === "pending" ? "active" : ""} onClick={() => setModelView("pending")}>待评估</button></div><span>{visibleModels.length} 个模型</span></div>}
-        {!catalog ? <div className="anspire-loading">正在读取模型授权目录…</div> : <div className="admin-model-list">{visibleModels.map((model) => {
-          const testCurrent = model.test_status === "success" && model.tested_credential_version === model.current_credential_version;
-          return <article key={model.model_id} className={model.is_authorized ? "authorized" : ""}><div className="admin-model-identity"><span className={`model-test-dot ${testCurrent ? "success" : model.test_status}`} aria-hidden="true" /><div><strong>{model.display_name}</strong><small>{model.family} · {model.model_id}</small></div></div><p>{model.profile}</p><div className="admin-model-state"><span>{testCurrent ? `${model.last_test_latency_ms ?? "—"} ms` : model.test_status === "failed" ? "测试失败" : model.tested_credential_version ? "凭证变更，需复测" : "尚未测试"}</span>{model.is_default && <b>默认</b>}{model.is_authorized && !model.is_default && <button type="button" disabled={Boolean(busy)} onClick={() => void setDefault(model)}>{busy === `default:${model.model_id}` ? "设置中…" : "设为默认"}</button>}</div><div className="admin-model-actions"><button className="secondary-button" type="button" disabled={Boolean(busy) || !config?.is_configured} onClick={() => void testModel(model)}>{busy === `test:${model.model_id}` ? "测试中…" : testCurrent ? "重新测试" : "测试模型"}</button><button className={model.is_authorized ? "secondary-button" : "primary-button"} type="button" disabled={Boolean(busy) || (!model.is_authorized && !testCurrent)} onClick={() => void toggleAuthorization(model)}>{busy === `authorize:${model.model_id}` ? "更新中…" : model.is_authorized ? "取消授权" : "加入授权"}</button></div></article>;
-        })}{!visibleModels.length && <p className="data-operations-empty">没有符合当前筛选条件的模型。</p>}</div>}
+        {!catalog ? <div className="anspire-loading">正在读取模型授权目录…</div> : <div className="admin-model-list">{groupedModels.map((group) => (
+          <section key={group.family} className="admin-model-group">
+            <header className="admin-model-group-title">
+              <h4>{group.family}</h4>
+              <small>{group.items.length} 个模型</small>
+            </header>
+            <div className="admin-model-grid">
+              {group.items.map((model) => {
+                const testCurrent = model.test_status === "success" && model.tested_credential_version === model.current_credential_version;
+                return (
+                  <article key={model.model_id} className={model.is_authorized ? "authorized" : ""}>
+                    <div className="admin-model-identity">
+                      <span className={`model-test-dot ${testCurrent ? "success" : model.test_status}`} aria-hidden="true" />
+                      <span className="admin-model-tag">{model.display_name}</span>
+                    </div>
+                    <p>{model.profile}</p>
+                    <div className="admin-model-state">
+                      {model.is_default && <b>默认</b>}
+                      {model.is_authorized && !model.is_default && (
+                        <button type="button" disabled={Boolean(busy)} onClick={() => void setDefault(model)}>
+                          {busy === `default:${model.model_id}` ? "设置中…" : "默认"}
+                        </button>
+                      )}
+                    </div>
+                    <div className="admin-model-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        disabled={Boolean(busy) || !config?.is_configured}
+                        onClick={() => void testModel(model)}
+                      >
+                        {busy === `test:${model.model_id}` ? "测试中…" : testCurrent ? "重测" : "测试"}
+                      </button>
+                      <button
+                        className={model.is_authorized ? "secondary-button" : "primary-button"}
+                        type="button"
+                        disabled={Boolean(busy) || (!model.is_authorized && !testCurrent)}
+                        onClick={() => void toggleAuthorization(model)}
+                      >
+                        {busy === `authorize:${model.model_id}` ? "更新中…" : model.is_authorized ? "撤销" : "授权"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ))}{!visibleModels.length && <p className="data-operations-empty">没有符合当前筛选条件的模型。</p>}</div>}
       </section>
+      {toast && (
+        <output className={`admin-toast ${toast.tone}`} aria-live="polite">
+          {toast.message}
+        </output>
+      )}
     </main>
   );
 }
@@ -199,6 +303,8 @@ export function McpSchemaPanel() {
   const [busy, setBusy] = useState<string | false>(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [candidates, setCandidates] = useState<McpSchemaCandidate[]>([]);
+  const [expanded, setExpanded] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +313,32 @@ export function McpSchemaPanel() {
       .catch((err) => { if (!cancelled) setError(humanizeApiError(err)); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await productionServices.adminMcpSchema.listCandidates();
+        if (!cancelled) setCandidates(data.candidates);
+      } catch {
+        // 候选加载失败不影响主列表,直接吞掉。
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!expanded || !catalog) return;
+    // 用户主动展开候选面板时强制再拉一次(可能刚注册了表)。
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await productionServices.adminMcpSchema.listCandidates();
+        if (!cancelled) setCandidates(data.candidates);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [expanded, catalog]);
 
   const filtered = useMemo(() => {
     if (!catalog) return [];
@@ -284,6 +416,50 @@ export function McpSchemaPanel() {
     }
   }
 
+  async function registerCandidate(tableName: string) {
+    setBusy(`register:${tableName}`);
+    setError("");
+    setNotice("");
+    try {
+      await productionServices.adminMcpSchema.register(tableName, { is_enabled: true });
+      // 重新拉列表(已注册表与候选都会更新)
+      const [catalogData, candData] = await Promise.all([
+        productionServices.adminMcpSchema.list(),
+        productionServices.adminMcpSchema.listCandidates(),
+      ]);
+      setCatalog(catalogData);
+      setCandidates(candData.candidates);
+      setSelectedTable(tableName);
+      setNotice(`已注册 ${tableName}`);
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unregisterTable(tableName: string) {
+    if (!window.confirm(`注销 ${tableName}？注销后 Agent 不能再查询此表。`)) return;
+    setBusy(`unregister:${tableName}`);
+    setError("");
+    setNotice("");
+    try {
+      const result: McpSchemaDeleteOut = await productionServices.adminMcpSchema.unregister(tableName);
+      const [catalogData, candData] = await Promise.all([
+        productionServices.adminMcpSchema.list(),
+        productionServices.adminMcpSchema.listCandidates(),
+      ]);
+      setCatalog(catalogData);
+      setCandidates(candData.candidates);
+      if (selectedTable === tableName) setSelectedTable(null);
+      setNotice(result.message);
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const categoryLabel: Record<string, string> = {
     opportunity: "商机",
     delivery: "交付",
@@ -313,6 +489,14 @@ export function McpSchemaPanel() {
             onClick={() => void refreshAll()}
           >
             {busy === "refreshAll" ? "正在刷新…" : "刷新所有 Schema"}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+          >
+            {expanded ? "折叠候选表" : `展开候选表${candidates.length ? ` (${candidates.length})` : ""}`}
           </button>
         </div>
       </header>
@@ -365,6 +549,43 @@ export function McpSchemaPanel() {
             ))}
           </div>
           {!filtered.length && <p className="mcp-empty">没有匹配的表。</p>}
+          {expanded && (
+            <div className="mcp-candidate-section">
+              <header>
+                <strong>候选物理表</strong>
+                <small>
+                  {candidates.length
+                    ? `${candidates.length} 张未注册`
+                    : "全部内置表都已注册"}
+                </small>
+              </header>
+              {candidates.length === 0 ? (
+                <p className="mcp-empty">暂时没有未注册的物理表。</p>
+              ) : (
+                candidates.map((c) => (
+                  <article key={c.table_name}>
+                    <button
+                      type="button"
+                      onClick={() => void registerCandidate(c.table_name)}
+                      disabled={Boolean(busy) && busy !== `register:${c.table_name}`}
+                    >
+                      <span>
+                        <strong>{c.display_name}</strong>
+                        <small>{c.table_name}</small>
+                        <em>{categoryLabel[c.category] ?? c.category}</em>
+                        <p>{c.description}</p>
+                      </span>
+                      <i
+                        className="mcp-readiness disabled"
+                        title="未注册"
+                        aria-label="candidate"
+                      />
+                    </button>
+                  </article>
+                ))
+              )}
+            </div>
+          )}
         </section>
 
         {/* ── 右侧：表详情 ── */}
@@ -548,6 +769,14 @@ export function McpSchemaPanel() {
               <footer>
                 <span>刷新会从数据库自动发现最新列结构和示例数据。</span>
                 <div>
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void unregisterTable(selected.table_name)}
+                  >
+                    {busy === `unregister:${selected.table_name}` ? "注销中…" : "注销"}
+                  </button>
                   <button
                     className="secondary-button"
                     type="button"

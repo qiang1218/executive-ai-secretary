@@ -18,6 +18,7 @@ import httpx
 import pytest
 
 from services import hermes_client as hermes_client_mod
+from services.hermes_client import HermesClientError
 
 
 # --------------------------------------------------------------------------
@@ -52,10 +53,14 @@ def test_is_known_profile_truth_table() -> None:
 
 def test_max_output_tokens_budgets() -> None:
     _prompt, _tokens, _kernel, _builder, _known, max_output_tokens = _prompts()
-    assert max_output_tokens("route") == 700
-    assert max_output_tokens("rewrite") == 1100
-    assert max_output_tokens("data") == 1600
-    assert max_output_tokens("general") == 2200
+    # budget 上调史:2026-08 因 reasoning 模型在 route profile 上截断
+    # (``finish_reason=length``、anpire_completion_truncated),把所有
+    # profile 的输出 budget 都拉到 ~1.5x 单次推理上限。
+    assert max_output_tokens("route") == 1500
+    assert max_output_tokens("rewrite") == 1600
+    assert max_output_tokens("plan") == 1600
+    assert max_output_tokens("data") == 2200
+    assert max_output_tokens("general") == 2800
     # Default profile falls through to 0 ("no limit").
     assert max_output_tokens("__missing__") == 0
 
@@ -197,7 +202,7 @@ async def test_run_profile_surfaces_4xx_as_runtime_error(monkeypatch) -> None:
     _build_client(monkeypatch, fake_resp)
 
     client = hermes_client_mod.HermesClient()
-    with pytest.raises(RuntimeError, match="unknown_profile|worker /v1/profile/run failed"):
+    with pytest.raises(HermesClientError, match="unknown_profile|bad") as exc_info:
         await client.run_profile(
             profile="nope",
             payload={},
@@ -205,6 +210,9 @@ async def test_run_profile_surfaces_4xx_as_runtime_error(monkeypatch) -> None:
             api_key="sk-test-1234567890abcdef",
             model_id="qwen3.5-plus",
         )
+    # Phase 3 错误码透传:run_profile 把 detail.code 提到 HermesClientError.code
+    assert exc_info.value.code == "unknown_profile"
+    assert exc_info.value.status_code == 422
 
 
 # --------------------------------------------------------------------------

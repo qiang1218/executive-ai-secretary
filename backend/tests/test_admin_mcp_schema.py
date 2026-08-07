@@ -261,6 +261,98 @@ def test_refresh_all_returns_catalog(
     assert body["enabled_count"] == 2
 
 
+# 7. Candidates / Register / Unregister flow
+
+
+def test_candidates_lists_builtin_minus_registered(client: TestClient, seeded: dict) -> None:
+    headers = _admin_headers(client, seeded)
+    _seed_schema(seeded["enterprise_id"], table_name="fact_finance_collection")
+
+    response = client.get(
+        "/api/v1/admin/mcp-schemas/candidates",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] >= 1
+    names = {c["table_name"] for c in body["candidates"]}
+    assert "fact_finance_collection" not in names
+    candidate = next(c for c in body["candidates"] if c["table_name"] == "fact_opportunity")
+    assert candidate["display_name"] == "商机事实表"
+    assert candidate["category"] == "opportunity"
+
+
+def test_register_unknown_table_rejects(client: TestClient, seeded: dict) -> None:
+    headers = _admin_headers(client, seeded)
+    response = client.post(
+        "/api/v1/admin/mcp-schemas/register/__not_in_builtin__",
+        headers=headers,
+        json={"is_enabled": True},
+    )
+    # 路径含双下划线这类特殊字符可能被 Pydantic 校验拒绝(422);即便通过
+    # 也应该因不在 BUILTIN_TABLES 里走到 404。两种 4xx 都被视为拒绝。
+    assert response.status_code in (404, 422), response.text
+
+
+def test_register_and_unregister_roundtrip(client: TestClient, seeded: dict) -> None:
+    headers = _admin_headers(client, seeded)
+
+    response = client.post(
+        "/api/v1/admin/mcp-schemas/register/fact_opportunity",
+        headers=headers,
+        json={"is_enabled": True, "max_rows": 50, "query_timeout_seconds": 8},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["table_name"] == "fact_opportunity"
+    assert body["is_enabled"] is True
+    assert body["max_rows"] == 50
+    assert body["query_timeout_seconds"] == 8
+
+    conflict = client.post(
+        "/api/v1/admin/mcp-schemas/register/fact_opportunity",
+        headers=headers,
+        json={"is_enabled": True},
+    )
+    assert conflict.status_code == 409, conflict.text
+
+    delete = client.post(
+        "/api/v1/admin/mcp-schemas/unregister/fact_opportunity",
+        headers=headers,
+    )
+    assert delete.status_code == 200, delete.text
+    assert delete.json() == {
+        "table_name": "fact_opportunity",
+        "deleted": True,
+        "message": "已注销",
+    }
+
+    second = client.post(
+        "/api/v1/admin/mcp-schemas/unregister/fact_opportunity",
+        headers=headers,
+    )
+    assert second.status_code == 404, second.text
+
+
+def test_register_uses_default_overrides_when_payload_missing(
+    client: TestClient, seeded: dict
+) -> None:
+    headers = _admin_headers(client, seeded)
+    response = client.post(
+        "/api/v1/admin/mcp-schemas/register/dim_customer",
+        headers=headers,
+        json={},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["table_name"] == "dim_customer"
+    assert body["is_enabled"] is True
+    assert body["max_rows"] == 100
+    assert body["query_timeout_seconds"] == 10
+
+
+# 6. Service-level smoke test (no HTTP)
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 6. Service-level smoke test (no HTTP)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

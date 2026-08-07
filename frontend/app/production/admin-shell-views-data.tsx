@@ -41,6 +41,7 @@ import {
   shortHash,
   syncStatusLabel,
 } from "./admin-shell-types";
+import { formatTimestamp } from "./workspace-utils";
 
 export function DataOperationsPanel() {
   const [overview, setOverview] = useState<DataOperationsV3Overview | null>(null);
@@ -345,13 +346,20 @@ export function HarnessPolicyPanel() {
     }
   }
 
-  async function simulate() {
+  async function simulate(forcedRuleId?: string) {
     if (!draft || !question.trim() || busy) return;
     setBusy("simulate");
     setError("");
     setNotice("");
     try {
-      setSimulation(await productionServices.adminHarness.simulate(question.trim(), draft));
+      setSimulation(
+        await productionServices.adminHarness.simulate(
+          question.trim(),
+          draft,
+          undefined,
+          forcedRuleId,
+        ),
+      );
     } catch (simulationError) {
       setError(humanizeApiError(simulationError));
     } finally {
@@ -407,7 +415,130 @@ export function HarnessPolicyPanel() {
 
             {activeModule === "glossary" && <div className="harness-focused-section"><header><div><small>理解与规划</small><h2>业务术语表</h2><p>把企业内部表达映射为稳定业务含义，不改变指标口径。</p></div><button className="secondary-button" type="button" onClick={() => setDraft((existing) => existing ? { ...existing, glossary: [...existing.glossary, { term: "", canonical: "", category: "其他", enabled: true }] } : existing)}>新增术语</button></header><div className="harness-glossary focused">{draft.glossary.map((entry, index) => <div key={`${entry.term}-${index}`}><input aria-label="术语" value={entry.term} placeholder="术语" onChange={(event) => setDraft((existing) => existing ? { ...existing, glossary: existing.glossary.map((item, itemIndex) => itemIndex === index ? { ...item, term: event.target.value } : item) } : existing)} /><input aria-label="标准名称" value={entry.canonical} placeholder="标准名称" onChange={(event) => setDraft((existing) => existing ? { ...existing, glossary: existing.glossary.map((item, itemIndex) => itemIndex === index ? { ...item, canonical: event.target.value } : item) } : existing)} /><input aria-label="类别" value={entry.category} placeholder="类别" onChange={(event) => setDraft((existing) => existing ? { ...existing, glossary: existing.glossary.map((item, itemIndex) => itemIndex === index ? { ...item, category: event.target.value } : item) } : existing)} /><label className="switch"><input type="checkbox" checked={entry.enabled} onChange={(event) => setDraft((existing) => existing ? { ...existing, glossary: existing.glossary.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item) } : existing)} /><span aria-hidden="true" /></label><button type="button" aria-label="移除术语" onClick={() => setDraft((existing) => existing ? { ...existing, glossary: existing.glossary.filter((_, itemIndex) => itemIndex !== index) } : existing)}>×</button></div>)}</div></div>}
 
-            {activeModule === "rules" && <div className="harness-focused-section"><header><div><small>规则与验证</small><h2>快速规则</h2><p>只加速高置信路由；查询改写、权限与证据校验始终执行。</p></div><button className="secondary-button" type="button" onClick={addRule}>新增规则</button></header><div className="harness-rule-list focused">{draft.fast_rules.map((rule, index) => <article key={rule.id}><header><label className="switch"><input type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(index, { enabled: event.target.checked })} /><span aria-hidden="true" /></label><input value={rule.name} aria-label="规则名称" onChange={(event) => updateRule(index, { name: event.target.value })} /><span>优先级 <input type="number" min={0} max={1000} value={rule.priority} onChange={(event) => updateRule(index, { priority: Number(event.target.value) })} /></span><button type="button" aria-label="删除规则" onClick={() => setDraft((existing) => existing ? { ...existing, fast_rules: existing.fast_rules.filter((_, ruleIndex) => ruleIndex !== index) } : existing)}>×</button></header><div className="harness-rule-fields"><label><span>路由</span><select value={rule.route} onChange={(event) => updateRule(index, { route: event.target.value as HarnessFastRule["route"], candidate_tools: event.target.value === "general" ? [] : rule.candidate_tools })}><option value="data">经营问数</option><option value="general">个人泛化</option></select></label><label><span>匹配方式</span><select value={rule.match_mode} onChange={(event) => updateRule(index, { match_mode: event.target.value as HarnessFastRule["match_mode"] })}><option value="any">任一命中</option><option value="all">全部命中</option></select></label><label><span>关键词（逗号分隔）</span><input value={rule.terms.join("，")} onChange={(event) => updateRule(index, { terms: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean) })} /></label><label><span>排除词（逗号分隔）</span><input value={rule.exclusions.join("，")} onChange={(event) => updateRule(index, { exclusions: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean) })} /></label></div>{rule.route === "data" && <div className="harness-tool-picks"><span>候选 MCP（最多 4 个）</span>{plannerTools.map((tool) => <label key={tool.tool_name}><input type="checkbox" checked={rule.candidate_tools.includes(tool.tool_name)} onChange={() => toggleCandidateTool(index, tool.tool_name)} /><span>{tool.display_name}</span></label>)}</div>}</article>)}</div></div>}
+            {activeModule === "rules" && (
+              <div className="harness-focused-section">
+                <header>
+                  <div>
+                    <small>规则与验证</small>
+                    <h2>快速规则</h2>
+                    <p>只加速高置信路由；查询改写、权限与证据校验始终执行。</p>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={addRule}>新增规则</button>
+                </header>
+                <div className="harness-rule-list focused">
+                  {draft.fast_rules.map((rule, index) => {
+                    const hitCount = metrics?.rule_hit_counts?.[rule.id] ?? 0;
+                    const lastHit = metrics?.last_rule_hit_at?.[rule.id];
+                    return (
+                      <article key={rule.id}>
+                        <header>
+                          <label className="switch">
+                            <input
+                              type="checkbox"
+                              checked={rule.enabled}
+                              onChange={(event) => updateRule(index, { enabled: event.target.checked })}
+                            />
+                            <span aria-hidden="true" />
+                          </label>
+                          <input
+                            value={rule.name}
+                            aria-label="规则名称"
+                            onChange={(event) => updateRule(index, { name: event.target.value })}
+                          />
+                          <span>
+                            优先级{" "}
+                            <input
+                              type="number"
+                              min={0}
+                              max={1000}
+                              value={rule.priority}
+                              onChange={(event) => updateRule(index, { priority: Number(event.target.value) })}
+                            />
+                          </span>
+                          <span className="harness-rule-hit" title={lastHit ? `上次命中 ${formatTimestamp(lastHit)}` : "尚无命中"}>
+                            {hitCount} 次
+                          </span>
+                          <button
+                            type="button"
+                            disabled={!rule.enabled || busy === "simulate"}
+                            onClick={() => void simulate(rule.id)}
+                          >
+                            试一下
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="删除规则"
+                            onClick={() => setDraft((existing) =>
+                              existing ? { ...existing, fast_rules: existing.fast_rules.filter((_, ruleIndex) => ruleIndex !== index) } : existing
+                            )}
+                          >
+                            ×
+                          </button>
+                        </header>
+                        <div className="harness-rule-fields">
+                          <label>
+                            <span>路由</span>
+                            <select
+                              value={rule.route}
+                              onChange={(event) => updateRule(index, {
+                                route: event.target.value as HarnessFastRule["route"],
+                                candidate_tools: event.target.value === "general" ? [] : rule.candidate_tools,
+                              })}
+                            >
+                              <option value="data">经营问数</option>
+                              <option value="general">个人泛化</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>匹配方式</span>
+                            <select
+                              value={rule.match_mode}
+                              onChange={(event) => updateRule(index, { match_mode: event.target.value as HarnessFastRule["match_mode"] })}
+                            >
+                              <option value="any">任一命中</option>
+                              <option value="all">全部命中</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>关键词（逗号分隔）</span>
+                            <input
+                              value={rule.terms.join("，")}
+                              onChange={(event) => updateRule(index, {
+                                terms: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean),
+                              })}
+                            />
+                          </label>
+                          <label>
+                            <span>排除词（逗号分隔）</span>
+                            <input
+                              value={rule.exclusions.join("，")}
+                              onChange={(event) => updateRule(index, {
+                                exclusions: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean),
+                              })}
+                            />
+                          </label>
+                        </div>
+                        {rule.route === "data" && (
+                          <div className="harness-tool-picks">
+                            <span>候选 MCP（最多 4 个）</span>
+                            {plannerTools.map((tool) => (
+                              <label key={tool.tool_name}>
+                                <input
+                                  type="checkbox"
+                                  checked={rule.candidate_tools.includes(tool.tool_name)}
+                                  onChange={() => toggleCandidateTool(index, tool.tool_name)}
+                                />
+                                <span>{tool.display_name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {activeModule === "simulate" && <div className="harness-focused-section"><header><div><small>规则与验证</small><h2>问题模拟与技术追踪</h2><p>模拟不调用经营工具；正式追踪默认只显示脱敏技术摘要。</p></div></header><div className="harness-validation-grid"><div className="harness-simulator"><label><span>示例问题</span><textarea rows={4} value={question} onChange={(event) => setQuestion(event.target.value)} /></label><button type="button" className="secondary-button" disabled={busy === "simulate" || !question.trim()} onClick={() => void simulate()}>{busy === "simulate" ? "正在模拟…" : "运行模拟"}</button>{simulation && <dl><div><dt>路由</dt><dd>{simulation.route}</dd></div><div><dt>来源</dt><dd>{simulation.route_source}{simulation.matched_rule_id ? ` · ${simulation.matched_rule_id}` : ""}</dd></div><div><dt>候选工具</dt><dd>{simulation.candidate_tools.join("、") || "无"}</dd></div><div><dt>歧义</dt><dd>{simulation.validation_issues.join("；") || "无"}</dd></div></dl>}</div><div className="harness-metrics"><strong>近 {metrics?.window_days ?? 30} 天</strong><div><span><b>{metrics?.message_count ?? 0}</b>消息任务</span><span><b>{Math.round((metrics?.structured_output_rate ?? 0) * 100)}%</b>结构有效</span><span><b>{Math.round((metrics?.tool_success_rate ?? 0) * 100)}%</b>工具成功</span></div><small>意图准确率需由基准集人工标注，不用线上自循环分数替代。</small></div></div><div className="harness-traces"><header><strong>最近技术追踪</strong><small>不显示问题、回答、个人记忆和业务正文</small></header>{traces.slice(0, 8).map((trace) => <article key={trace.message_id}><span className={`trace-route ${trace.route}`}>{trace.route ?? "—"}</span><div><strong>{trace.route_source ?? "unknown"} · v{trace.harness_version ?? "—"}</strong><small>{trace.organization_unit_count} 个事业部 · {trace.tools.join("、") || "未调用工具"}</small></div><span>{trace.stages.length} 阶段</span>{trace.diagnostic_shared_until && <i>已授权正文诊断</i>}</article>)}{!traces.length && <p>尚无正式任务追踪。</p>}</div></div>}
 

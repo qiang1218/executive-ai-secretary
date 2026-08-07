@@ -56,16 +56,25 @@ class HarnessSimulationRequest(BaseModel):
     question: str = Field(min_length=1, max_length=12000)
     config: dict[str, Any] | None = None
     organization_scope: dict[str, Any] | None = None
+    forced_rule_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="强制走该 fast_rule,跳过 match_fast_rule 自动选择;仅供 admin 调试。",
+    )
 
 
 class HarnessSimulationOut(BaseModel):
     route: Literal["data", "general", "clarification"]
-    route_source: Literal["fast_rule", "hermes", "validation"]
+    route_source: Literal["fast_rule", "hermes", "validation", "forced"]
     matched_rule_id: str | None
     candidate_tools: list[str]
     query_spec: dict[str, Any]
     validation_issues: list[str]
     config_hash: str
+    skipped_rule_ids: list[str] = Field(
+        default_factory=list,
+        description="本次匹配中被排除的 fast_rule id 列表。",
+    )
 
 
 class HarnessMetricsOut(BaseModel):
@@ -76,6 +85,14 @@ class HarnessMetricsOut(BaseModel):
     tool_success_rate: float
     route_counts: dict[str, int]
     stage_latency_p95_ms: dict[str, int]
+    rule_hit_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="各 fast_rule 的命中次数;key = matched_rule_id,仅统计 route_source=fast_rule 的记录。",
+    )
+    last_rule_hit_at: dict[str, datetime] = Field(
+        default_factory=dict,
+        description="各 fast_rule 最近一次命中时间;key = matched_rule_id。",
+    )
 
 
 class HarnessTraceOut(BaseModel):

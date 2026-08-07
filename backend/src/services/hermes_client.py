@@ -12,6 +12,21 @@ from configs.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
+class HermesClientError(RuntimeError):
+    """worker ``/v1/profile/run`` 失败。携带 status_code 与 machine-readable code
+    让上层(``simulate_harness`` 等)能按类别分发最终 HTTP code,不再把所有错误
+    收口到一个 422。
+
+    透传约定：worker 端 ``profile_run`` 把 ``HermesRunError.code`` 放进
+    ``HTTPException.detail["code"]``;run_profile 把 ``code`` 落到这里。
+    """
+
+    def __init__(self, code: str, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+
+
 @dataclass
 class HermesStreamEvent:
     """Worker SSE 事件。"""
@@ -163,12 +178,28 @@ class HermesClient:
             )
         if response.status_code >= 400:
             try:
-                detail = response.json().get("detail")
+                payload = response.json()
             except ValueError:
-                detail = response.text
-            raise RuntimeError(
-                f"worker /v1/profile/run failed: {response.status_code} {detail}"
+                raise HermesClientError(
+                    "harness_worker_invalid_response",
+                    response.status_code,
+                    f"worker /v1/profile/run invalid JSON: {response.text[:200]}",
+                )
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            if isinstance(detail, dict):
+                code = str(detail.get("code") or "harness_simulation_failed")
+                message = str(detail.get("message") or detail)
+            else:
+                code = (
+                    "harness_unauthorized" if response.status_code == 401
+                    else "harness_simulation_failed"
+                )
+                message = str(detail) if detail is not None else response.text
+            logger.error(
+                "hermes.profile_run.failed status=%s code=%s message=%s",
+                response.status_code, code, message,
             )
+            raise HermesClientError(code, response.status_code, message)
         data = response.json()
         usage = {
             "prompt_tokens": data.get("input_tokens"),
