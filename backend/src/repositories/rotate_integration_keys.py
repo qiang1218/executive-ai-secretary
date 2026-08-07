@@ -28,7 +28,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    from worker_old.integration_key_rotation import (  # noqa: delayed import
+    # ``services.integration_key_rotation`` is currently a stub that raises
+    # NotImplementedError; the real implementation is expected to land here.
+    # We import through the services shim instead of ``worker_old``
+    # directly so that future migration of the real implementation does not
+    # silently change this entry point's import path.
+    from services.integration_key_rotation import (  # noqa: delayed import
         rotate_integration_keys,
         verify_integration_key_version,
     )

@@ -29,10 +29,13 @@ from logs.config import configure_logging
 from api.middlewares import RequestContextMiddleware
 
 from configs.settings import get_settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _build_lifespan() -> object:
-    """构造 lifespan 上下文管理器：在启动时初始化审计链、校验关键密钥。"""
+    """构造 lifespan 上下文管理器：启动期审计链、关键密钥、Phase 3 scheduler。"""
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -42,7 +45,33 @@ def _build_lifespan() -> object:
         settings.integration_encryption_keys()
         with engine.begin() as connection:
             initialize_audit_chains(connection)
-        yield
+
+        # Phase 3: 当 service_role 包含 api / scheduler 时，同进程启动 job_runner。
+        # 这把 ``worker_old/runner.py`` 那条 LISTEN/NOTIFY 后台循环吸收到 API 进程内。
+        runner = None
+        try:
+            from services.job_runner import (
+                should_run_in_process,
+                start_job_runner,
+                stop_job_runner,
+            )
+
+            if should_run_in_process():
+                runner = await start_job_runner()
+        except Exception:  # noqa: BLE001
+            # scheduler 启动失败不应拖死 API；记录并继续。
+            logger.exception("job_runner_startup_failed")
+
+        try:
+            yield
+        finally:
+            if runner is not None:
+                try:
+                    from services.job_runner import stop_job_runner
+
+                    await stop_job_runner()
+                except Exception:  # noqa: BLE001
+                    logger.exception("job_runner_shutdown_failed")
 
     return lifespan
 

@@ -44,7 +44,9 @@ _SUBMODULE_NAMES = (
     "health_service",
     "idempotency",
     "ingestion",
+    "integration_key_rotation",
     "job_management_service",
+    "mcp_schema_service",
     "mcp_tool_service",
     "memory_service",
     "metric_policy",
@@ -59,11 +61,8 @@ _SUBMODULE_NAMES = (
     "source_contract",
     "source_contract_v3",
     "storage",
-    # 下列模块物理在 ``worker`` 包，但仍可通过 ``services.<name>`` 访问
+    # 下列模块物理在 ``worker_old`` 包，但仍可通过 ``services.<name>`` 访问
     "file_key_rotation",
-    "hermes_client",
-    "integration_key_rotation",
-    "mcp_app",
     "mcp_registry",
     # ``cli`` / ``job_state`` 物理在 ``utils`` 包
     "cli",
@@ -72,10 +71,19 @@ _SUBMODULE_NAMES = (
 
 
 def __getattr__(name: str) -> Any:
-    """PEP 562：按需懒加载子模块或子模块中的符号。"""
+    """PEP 562：按需懒加载子模块或子模块中的符号。
+
+    回退查找顺序：
+        services → worker → utils → worker_old
+    最后一级（``worker_old``）覆盖了旧架构的"跨包别名"（``mcp_registry``、
+    ``file_key_rotation``、``hermes_client``）。通过这一级，``services.<X>``
+    能在不主动 import 的前提下访问 ``worker_old`` 提供的同名子模块——这是
+    Phase 1 修复 ``worker_old.__getattr__`` 时无意中暴露的小语言差异，
+    顺手补齐。
+    """
     if name in _SUBMODULE_NAMES:
-        # 优先 services 本地，再 fallback 到 worker / utils
-        for pkg in ("services", "worker", "utils"):
+        # 优先 services 本地，再 fallback 到 worker / utils / worker_old
+        for pkg in ("services", "worker", "utils", "worker_old"):
             try:
                 return importlib.import_module(f"{pkg}.{name}")
             except ImportError:
@@ -84,7 +92,7 @@ def __getattr__(name: str) -> Any:
 
     # 在子模块中查找符号
     for sub_name in _SUBMODULE_NAMES:
-        for pkg in ("services", "worker", "utils"):
+        for pkg in ("services", "worker", "utils", "worker_old"):
             try:
                 sub = importlib.import_module(f"{pkg}.{sub_name}")
             except ImportError:

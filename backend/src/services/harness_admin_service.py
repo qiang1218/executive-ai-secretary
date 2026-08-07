@@ -6,8 +6,12 @@ methods. The ``/admin/harness`` router instantiates
 ``HarnessAdminService(db, settings)`` and delegates all DB / business logic
 to it. The router is responsible only for parameter parsing and response
 return.
-"""
 
+Phase 2: ``simulate_harness`` no longer shells out to ``hermes-agent`` via
+``worker_old.hermes_client.run_hermes``.  Instead the call is forwarded to
+the worker ``/v1/profile/run`` endpoint which executes the same prompt
+template (kept in ``worker.profile_prompts``) via a plain ``httpx`` call.
+"""
 from __future__ import annotations
 
 import math
@@ -47,6 +51,7 @@ from schemas import (
 )
 from services.anspire import AnspireConfigurationError, runtime_provider_config
 from services.authz import Principal
+from services.hermes_client import HermesClient, HermesStreamEvent
 from services.harness_config import (
     HARNESS_SCHEMA_VERSION,
     SAFETY_KERNEL_SUMMARY,
@@ -58,8 +63,32 @@ from services.harness_config import (
     validate_harness_config,
 )
 from services.query_spec import normalize_query_spec
-from worker_old.hermes_client import HermesRuntimeError, parse_json_response, run_hermes
 from worker_old.mcp_registry import effective_catalog
+
+
+def _parse_json_response(text: str) -> dict:
+    """Strip Markdown code fences / surrounding prose and parse JSON.
+
+    Phase 2: previously lived in ``worker_old.hermes_client.parse_json_response``.
+    Kept as a thin shim here so the rest of the service file does not have
+    to depend on any old-architecture module.
+    """
+    import json
+    import re
+
+    cleaned = text.strip()
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned, re.IGNORECASE)
+    if fence:
+        cleaned = fence.group(1).strip()
+    cleaned = cleaned.strip("`")
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        # 最后一道 fallback：尝试抽取 "{...}" 第一段
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            return json.loads(match.group(0))
+        raise
 
 
 def _p95(values: list[int]) -> int:
@@ -384,24 +413,22 @@ class HarnessAdminService:
         model_config = await model_config_repo.find_active(db, principal.enterprise_id)
         if model_config is None:
             raise AppError(409, "anspire_not_configured", "请先配置并启用 Anspire 模型")
+        hermes_client = HermesClient(settings)
         try:
             provider = runtime_provider_config(model_config, settings)
             if not route:
-                response = await run_in_threadpool(
-                    run_hermes,
-                    settings,
+                response = await hermes_client.run_profile(
                     profile="route",
-                    request_id=f"simulate:{uuid.uuid4()}:route",
                     payload={
                         "question": payload.question,
                         "harness_config": config,
                         "organization_count": len(resolved_ids),
                     },
-                    provider_config=provider,
+                    base_url=provider["endpoint_url"],
+                    api_key=provider["api_key"],
+                    model_id=provider["model_id"],
                 )
-                route_data = await run_in_threadpool(
-                    parse_json_response, response["text"]
-                )
+                route_data = _parse_json_response(response["text"])
                 route = str(route_data.get("route") or "clarification")
             if route not in {"data", "general", "clarification"}:
                 route = "clarification"
@@ -409,11 +436,8 @@ class HarnessAdminService:
             query_spec: dict[str, Any] = {}
             if route == "data":
                 rewritten_question = apply_glossary(payload.question, config)
-                response = await run_in_threadpool(
-                    run_hermes,
-                    settings,
+                response = await hermes_client.run_profile(
                     profile="rewrite",
-                    request_id=f"simulate:{uuid.uuid4()}:rewrite",
                     payload={
                         "question": rewritten_question,
                         "harness_config": config,
@@ -422,11 +446,11 @@ class HarnessAdminService:
                             "organization_unit_ids": [str(item) for item in resolved_ids],
                         },
                     },
-                    provider_config=provider,
+                    base_url=provider["endpoint_url"],
+                    api_key=provider["api_key"],
+                    model_id=provider["model_id"],
                 )
-                rewrite_data = await run_in_threadpool(
-                    parse_json_response, response["text"]
-                )
+                rewrite_data = _parse_json_response(response["text"])
                 query_spec = normalize_query_spec(
                     rewrite_data,
                     question=rewritten_question,
@@ -435,8 +459,10 @@ class HarnessAdminService:
                         "organization_unit_ids": [str(item) for item in resolved_ids],
                     },
                 )
-        except (AnspireConfigurationError, HermesRuntimeError) as exc:
-            raise AppError(422, getattr(exc, "code", "harness_simulation_failed"), str(exc)) from exc
+        except AnspireConfigurationError as exc:
+            raise AppError(422, exc.code, str(exc)) from exc
+        except RuntimeError as exc:
+            raise AppError(422, "harness_simulation_failed", str(exc)) from exc
 
         planner_catalog = await run_in_threadpool(
             effective_catalog, db, principal.enterprise_id

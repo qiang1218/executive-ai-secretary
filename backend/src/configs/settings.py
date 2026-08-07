@@ -58,7 +58,6 @@ class Settings(BaseSettings):
 
     capability_hmac_key: SecretStr = SecretStr("development-only-capability-key-change-me")
     capability_token_ttl_seconds: int = Field(default=90, ge=15, le=600)
-    mcp_hub_url: str = "http://mcp-hub:8010"
     hermes_timeout_seconds: float = Field(default=120, ge=5, le=600)
     integration_encryption_key: SecretStr = SecretStr("")
     integration_encryption_key_version: str = "v1"
@@ -157,7 +156,6 @@ class Settings(BaseSettings):
     worker_base_url: str = "http://127.0.0.1:8001"  # API 侧连接 worker 的地址
     hermes_api_key: SecretStr | None = None  # worker 鉴权用
     hermes_max_concurrent_runs: int = Field(default=2, ge=1, le=32)
-    hermes_model_default: str = "qwen3.5-plus"
     hermes_max_iterations: int = Field(default=10, ge=1, le=50)
     hermes_max_tokens: int | None = None
 

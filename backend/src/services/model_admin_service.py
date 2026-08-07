@@ -40,13 +40,13 @@ from services.anspire import (
     validate_anspire_model,
 )
 from services.authz import Principal
+from services.hermes_client import HermesClient
 from services.model_authorization import (
     authorized_model_rows,
     ensure_authorization_row,
     model_authorization,
     model_catalog_item,
 )
-from worker_old.hermes_client import HermesRuntimeError, test_anspire_provider
 from schemas import (
     AdminModelAuthorizationOut,
     AdminModelCatalogOut,
@@ -232,6 +232,7 @@ class ModelAdminService:
         config = await self._get_config(principal)
         if config is None or not config.api_key_ciphertext:
             raise AppError(409, "anspire_not_configured", "请先保存 Anspire API Key")
+        hermes_client = HermesClient(settings)
         try:
             provider_config = {
                 "provider": ANSPIRE_PROVIDER,
@@ -239,8 +240,12 @@ class ModelAdminService:
                 "model_id": validate_anspire_model(config.model_id),
                 "api_key": decrypt_anspire_api_key(config, settings),
             }
-            result = test_anspire_provider(settings, provider_config)
-        except (AnspireConfigurationError, HermesRuntimeError) as exc:
+            result = await hermes_client.test_anspire_provider(
+                endpoint_url=provider_config["endpoint_url"],
+                api_key=provider_config["api_key"],
+                model_id=provider_config["model_id"],
+            )
+        except (AnspireConfigurationError, RuntimeError) as exc:
             config.is_enabled = False
             config.last_tested_at = utc_now()
             config.last_test_status = "failed"
@@ -330,17 +335,14 @@ class ModelAdminService:
             raise AppError(409, "anspire_not_configured", "请先保存 Anspire API Key")
         row = await ensure_authorization_row(db, principal.enterprise_id, str(item["id"]))
         tested_at = utc_now()
+        hermes_client = HermesClient(settings)
         try:
-            result = test_anspire_provider(
-                settings,
-                {
-                    "provider": ANSPIRE_PROVIDER,
-                    "endpoint_url": ANSPIRE_ENDPOINT_URL,
-                    "model_id": str(item["id"]),
-                    "api_key": decrypt_anspire_api_key(config, settings),
-                },
+            result = await hermes_client.test_anspire_provider(
+                endpoint_url=ANSPIRE_ENDPOINT_URL,
+                api_key=decrypt_anspire_api_key(config, settings),
+                model_id=str(item["id"]),
             )
-        except (AnspireConfigurationError, HermesRuntimeError) as exc:
+        except (AnspireConfigurationError, RuntimeError) as exc:
             row.test_status = "failed"
             row.tested_credential_version = config.credential_version
             row.last_tested_at = tested_at

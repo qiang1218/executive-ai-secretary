@@ -122,3 +122,111 @@ class HermesClient:
                 return resp.status_code == 200
         except Exception:
             return False
+
+    async def run_profile(
+        self,
+        *,
+        profile: str,
+        payload: dict,
+        base_url: str,
+        api_key: str,
+        model_id: str,
+        endpoint_url: str | None = None,
+    ) -> dict:
+        """Phase 2: 调用 worker ``/v1/profile/run`` 取代 ``run_hermes`` subprocess。
+
+        返回 dict ``{"text", "model", "input_tokens?", "output_tokens?"}``；
+        与旧 ``RunResponse`` 兼容，业务侧用 ``text`` / ``model`` / ``usage``。
+        """
+        provider_dict: dict = {
+            "endpoint_url": endpoint_url or base_url,
+            "model_id": model_id,
+            "api_key": api_key,
+            "provider": "anspire",
+        }
+        body = {"profile": profile, "payload": payload, "provider": provider_dict}
+
+        headers = {}
+        if self._settings.hermes_api_key:
+            headers["Authorization"] = (
+                f"Bearer {self._settings.hermes_api_key.get_secret_value()}"
+            )
+
+        async with httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=self._timeout,
+        ) as client:
+            response = await client.post(
+                "/v1/profile/run",
+                json=body,
+                headers=headers,
+            )
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail")
+            except ValueError:
+                detail = response.text
+            raise RuntimeError(
+                f"worker /v1/profile/run failed: {response.status_code} {detail}"
+            )
+        data = response.json()
+        usage = {
+            "prompt_tokens": data.get("input_tokens"),
+            "completion_tokens": data.get("output_tokens"),
+        }
+        return {
+            "text": data.get("text") or "",
+            "model": data.get("model") or model_id,
+            "usage": usage,
+        }
+
+    async def test_anspire_provider(  # noqa: D401 — third-party gateway ping
+        self,
+        *,
+        endpoint_url: str,
+        api_key: str,
+        model_id: str,
+    ) -> dict:
+        """同步测试 Anspire provider 连通性（直连网关 ``/chat/completions``）。
+
+        Phase 2: 从 ``worker_old.hermes_client.test_anpire_provider`` 物理迁移过来，
+        改由 ``services/`` 这一侧直连，不再依赖 ``hermes-agent`` 子进程。
+        """
+        import time
+
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    f"{endpoint_url.rstrip('/')}/chat/completions",
+                    headers={
+                        "Authorization": api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model_id,
+                        "stream": False,
+                        "messages": [
+                            {"role": "system", "content": "Reply with only: OK"},
+                            {"role": "user", "content": "connection test"},
+                        ],
+                        "max_tokens": 8,
+                        "temperature": 0,
+                    },
+                )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Anspire gateway unavailable: {exc}") from exc
+
+        latency_ms = round((time.monotonic() - started) * 1000)
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Anspire provider test failed: HTTP {response.status_code}"
+            )
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Anspire returned an invalid response") from exc
+        if not isinstance(result.get("choices"), list):
+            raise RuntimeError("Anspire response does not contain choices")
+        return {"status": "success", "latency_ms": latency_ms, "model": model_id}
