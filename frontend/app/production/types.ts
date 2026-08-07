@@ -398,43 +398,6 @@ export type ModelProviderTest = {
   tested_at: string;
 };
 
-export type McpTool = {
-  tool_name: string;
-  display_name: string;
-  description: string;
-  category: string;
-  domains: string[];
-  parameters: Record<string, Record<string, unknown>>;
-  source_type: "built_in" | "composite";
-  component_tools: string[];
-  definition_version: number;
-  is_enabled: boolean;
-  planner_enabled: boolean;
-  timeout_seconds: number;
-  max_rows: number;
-  operator_note: string | null;
-  configured: boolean;
-  readiness: "ready" | "disabled" | "data_unavailable";
-  readiness_issues: string[];
-  updated_at: string | null;
-};
-
-export type McpCompositeToolCreate = {
-  tool_name: string;
-  display_name: string;
-  description: string;
-  category: string;
-  component_tools: string[];
-  operator_note?: string;
-};
-
-export type McpToolCatalog = {
-  tools: McpTool[];
-  enabled_count: number;
-  planner_count: number;
-  generated_at: string;
-};
-
 // ── MCP v2 Schema 管理 ──────────────────────────────────
 
 export type McpColumnSchema = {

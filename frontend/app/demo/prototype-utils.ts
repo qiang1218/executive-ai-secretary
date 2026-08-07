@@ -25,6 +25,21 @@ export function toggleOrganizationSelection(current: string[], organizationId: s
   return next.length ? next : [ALL_ORGANIZATIONS_ID];
 }
 
+export function classifyQuestion(question: string): { route: RouteKind; answerId: string } {
+  if (/这份|文件|报告里|刚才上传|工作表|幻灯片/.test(question)) return { route: "file", answerId: "file" };
+  if (/搜索|公开|行业|竞争对手|竞品|市场/.test(question)) return { route: "research", answerId: "research" };
+  if (/写|整理|备忘录|邮件|讲话|会议总结|汇报/.test(question)) return { route: "general", answerId: "general" };
+  if (/延期.*回款|项目.*回款|回款.*项目|哪些项目可能延期/.test(question)) return { route: "data", answerId: "delivery" };
+  if (/回款|应收|现金/.test(question)) return { route: "data", answerId: "collection" };
+  if (/负责人|事业部|部门|谁的|谁最好|谁风险|谁.*推进|华东|华南|北区/.test(question)) return { route: "data", answerId: "organization" };
+  if (/预测|大概能签|能签多少/.test(question)) return { route: "data", answerId: "forecast" };
+  if (/重点客户|客户现在/.test(question)) return { route: "data", answerId: "customers" };
+  if (/为什么|原因|下降|变化/.test(question)) return { route: "data", answerId: "change" };
+  if (/目标|完成多少|差距/.test(question)) return { route: "data", answerId: "target" };
+  if (/项目|交付|里程碑/.test(question)) return { route: "data", answerId: "delivery" };
+  return { route: "data", answerId: "overview" };
+}
+
 export function makeConversationTitle(question: string, answerId: string) {
   const known: Record<string, string> = { overview: "本月整体经营情况", target: "收入目标完成与差距", change: "商机变化原因", forecast: "本季度签约预测", customers: "重点客户经营情况", delivery: "项目交付与回款", collection: "本月回款情况", organization: "组织与负责人表现", people: "负责人商机推进对比", file: "当前文件要点", research: "行业公开研究", general: "经营材料整理", failure: "回款数据查询" };
   return known[answerId] ?? question.slice(0, 20);

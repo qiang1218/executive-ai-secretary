@@ -134,24 +134,16 @@ export function ProductionHome({
   const c = copy[language];
   const greeting = useHumanGreeting(me, language, salutation);
   const hasScope = organizationUnits.length > 0;
-  const suggestions = language === "en"
-    ? ["Summarize this month's operating changes", "Show items that need my confirmation", "Draft a three-minute executive update"]
-    : language === "zh-TW"
-      ? ["整理本月經營變化", "查看需要我確認的事項", "起草三分鐘經營會匯報"]
-      : ["整理本月经营变化", "查看需要我确认的事项", "起草三分钟经营会汇报"];
+  const suggestions = c.suggestions;
   const dailyBriefAsOf = dailyBriefDataAsOf(dailyBrief);
   const briefTitle = dailyBrief
     ? dailyBriefHeadline(dailyBrief, language)
-    : dailyBriefStatus === "loading"
-      ? language === "en" ? "Reviewing today's priorities" : language === "zh-TW" ? "正在核對今日事項" : "正在核对今日事项"
-      : language === "en" ? "Morning brief is temporarily unavailable" : language === "zh-TW" ? "晨間簡報暫不可用" : "晨间简报暂不可用";
+    : dailyBriefStatus === "loading" ? c.briefLoading : c.briefError;
   const briefMeta = dailyBrief
     ? dailyBriefAsOf
-      ? `${language === "en" ? "Morning brief · Data through" : language === "zh-TW" ? "晨間簡報 · 數據截至" : "晨间简报 · 数据截至"} ${formatTimestamp(dailyBriefAsOf, language)}`
-      : language === "en" ? "Morning brief · Data status pending" : language === "zh-TW" ? "晨間簡報 · 數據狀態待確認" : "晨间简报 · 数据状态待确认"
-    : dailyBriefStatus === "loading"
-      ? language === "en" ? "Morning brief · Checking the current scope" : language === "zh-TW" ? "晨間簡報 · 正在核對目前範圍" : "晨间简报 · 正在核对当前范围"
-      : language === "en" ? "Morning brief · Check data status and try again" : language === "zh-TW" ? "晨間簡報 · 請檢查數據狀態後重試" : "晨间简报 · 请检查数据状态后重试";
+      ? `${c.briefDataThrough} ${formatTimestamp(dailyBriefAsOf, language)}`
+      : c.briefDataPending
+    : dailyBriefStatus === "loading" ? c.briefLoadingScope : c.briefErrorRetry;
 
   return (
     <div className="workspace-home">
@@ -161,7 +153,7 @@ export function ProductionHome({
             <button className="morning-brief-trigger production-brief-trigger" type="button" onClick={() => dailyBrief && onOpenReport()} disabled={!dailyBrief}>
                 <span className="morning-brief-dot" aria-hidden="true" />
                 <span><strong>{briefTitle}</strong><small>{briefMeta}</small></span>
-                <span>{language === "en" ? "View morning brief" : language === "zh-TW" ? "查看晨間摘要" : "查看晨间摘要"} <b aria-hidden="true">›</b></span>
+                <span>{c.briefViewReport} <b aria-hidden="true">›</b></span>
               </button>
 
             <section className="workspace-greeting" aria-labelledby="production-greeting-title">
@@ -187,7 +179,7 @@ export function ProductionHome({
               onSubmit={onSubmit}
             />
 
-            <section className="prompt-suggestions production-prompt-suggestions" aria-label={language === "en" ? "Suggested questions" : "建议问题"}><div>{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => setDraft(suggestion)}><span>{suggestion}</span><i aria-hidden="true">›</i></button>)}</div></section>
+            <section className="prompt-suggestions production-prompt-suggestions" aria-label={c.suggestionsAria}><div>{suggestions.map((suggestion) => <button type="button" key={suggestion} onClick={() => setDraft(suggestion)}><span>{suggestion}</span><i aria-hidden="true">›</i></button>)}</div></section>
           </div>
           <p className="home-service-note">{dataCapabilities?.source_kind.startsWith("simulated_") ? "当前使用演示模拟数据。" : dataCapabilities ? "经营数据已接入。" : "当前尚未激活经营数据。"}{c.disclaimer}</p>
         </div>
@@ -529,7 +521,7 @@ export function ProductionComposer({
           <OrganizationPicker language={language} units={organizationUnits} value={organizationScope} onChange={setOrganizationScope} disabled={!organizationUnits.length} />
         </div>
         <div className="composer-send">
-          {draft.length >= COMPOSER_HINT_THRESHOLD && <span className="composer-character-count">{language === "en" ? `${(COMPOSER_MAX_LENGTH - draft.length).toLocaleString("en")} characters remaining` : `还可输入 ${(COMPOSER_MAX_LENGTH - draft.length).toLocaleString(language)} 字`}</span>}
+          {draft.length >= COMPOSER_HINT_THRESHOLD && <span className="composer-character-count">{`${c.charsRemainingPrefix}${c.charsRemainingPrefix ? " " : ""}${(COMPOSER_MAX_LENGTH - draft.length).toLocaleString(language)} ${c.charsRemainingSuffix}`}</span>}
           <label className="composer-model-picker">
             <span className="sr-only">当前模型</span>
             <span className="composer-model-value" aria-hidden="true">{selectedModelLabel}</span>
@@ -632,14 +624,14 @@ function OrganizationPicker({
     <div ref={rootRef} className="organization-picker">
       <button type="button" className="composer-tool-button scope" disabled={disabled} aria-haspopup="dialog" aria-expanded={open} aria-label={`${label}，选择经营数据范围`} title={draftScope.mode === "selected" ? draftScope.organization_unit_ids.map((id) => units.find((unit) => unit.id === id)?.name).filter(Boolean).join("、") : c.scope} onClick={toggleOpen}><UiIcon name="organization" /><span>{label}</span><span className="organization-picker-chevron" aria-hidden="true">⌄</span></button>
       {open && <div className="organization-popover">
-        <header><strong>{language === "en" ? "Business unit scope" : "选择事业部"}</strong></header>
-        {units.length > 5 && <label className="organization-search"><UiIcon name="search" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={language === "en" ? "Search business units" : "搜索事业部"} autoFocus /></label>}
+        <header><strong>{c.businessUnitScope}</strong></header>
+        {units.length > 5 && <label className="organization-search"><UiIcon name="search" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={c.searchBusinessUnits} autoFocus /></label>}
         <div className="organization-options" role="listbox" aria-multiselectable="true" aria-label="可分析事业部">
           <button type="button" role="option" aria-selected={draftScope.mode === "all_authorized"} className={draftScope.mode === "all_authorized" ? "selected" : ""} onClick={() => setDraftScope(ALL_ORGANIZATIONS_SCOPE)}><span className="organization-check">{draftScope.mode === "all_authorized" ? "✓" : ""}</span><span>{c.scope}</span><UiIcon name="organization" /></button>
           {filtered.map((unit) => <button type="button" role="option" aria-selected={draftScope.mode === "selected" && selectedIds.has(unit.id)} className={selectedIds.has(unit.id) && draftScope.mode === "selected" ? "selected" : ""} key={unit.id} onClick={() => toggleUnit(unit.id)}><span className="organization-check">{selectedIds.has(unit.id) && draftScope.mode === "selected" ? "✓" : ""}</span><span>{unit.name}</span><UiIcon name="organization" /></button>)}
           {!filtered.length && <p className="organization-empty">没有匹配的事业部</p>}
         </div>
-        <footer><small>可选范围由企业管理员配置</small><span>{selectedCount} / {units.length} 已选</span><button type="button" className="organization-apply" disabled={selectedCount < 1} onClick={apply}>{language === "en" ? "Apply" : "应用"}</button></footer>
+        <footer><small>可选范围由企业管理员配置</small><span>{selectedCount} / {units.length} 已选</span><button type="button" className="organization-apply" disabled={selectedCount < 1} onClick={apply}>{c.apply}</button></footer>
       </div>}
     </div>
   );

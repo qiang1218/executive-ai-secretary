@@ -18,6 +18,7 @@ import type {
   ConversationMessage,
   DataCapabilities,
   DailyBrief,
+  ExecutivePersonalProfile,
   Job,
   Memory,
   OrganizationUnit,
@@ -37,7 +38,6 @@ import {
   type ProfilePreferences,
   type ProjectDialogState,
   type SidebarMenuState,
-  type ThemePreference,
   type UiLanguage,
   type WorkspacePanel,
   ALL_ORGANIZATIONS_SCOPE,
@@ -74,7 +74,6 @@ import {
   WorkspaceDetailPanel,
 } from "./workspace-panels";
 import {
-  readStoredTheme,
   readStoredUnreadConversationIds,
   resolveInitialLanguage,
   resolveInitialModelId,
@@ -91,6 +90,7 @@ import {
   buildSidebarMenuState,
   findJobForMessage,
 } from "./workspace-actions";
+import { useThemePreference, useLanguagePreference } from "../shared/use-preferences";
 
 export function ProductionWorkspace({
   initialBootstrap,
@@ -139,8 +139,8 @@ export function ProductionWorkspace({
   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
   const [projectConversations, setProjectConversations] = useState<Record<string, Conversation[]>>({});
   const [projectLoadingId, setProjectLoadingId] = useState<string | null>(null);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(readStoredTheme);
-  const [languagePreference, setLanguagePreference] = useState<UiLanguage>(() => resolveInitialLanguage(initialBootstrap));
+  const [themePreference, setThemePreference] = useThemePreference();
+  const [languagePreference, setLanguagePreference] = useLanguagePreference(resolveInitialLanguage(initialBootstrap));
   const [profilePreferences, setProfilePreferences] = useState<ProfilePreferences>(() => resolveInitialProfilePreferences(initialBootstrap));
   const [memoryEnabled, setMemoryEnabled] = useState(initialBootstrap.personalProfile?.memory_enabled ?? initialBootstrap.me.user.memory_enabled);
   const accountRef = useRef<HTMLDivElement>(null);
@@ -205,17 +205,6 @@ export function ProductionWorkspace({
     // 这里仅做一次初始消息加载（如果有需要）。
     return () => {};
   }, [activeConversationId]);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = themePreference;
-    document.documentElement.style.colorScheme = themePreference === "system" ? "light dark" : themePreference;
-    window.localStorage.setItem("executive-workbench-theme", themePreference);
-  }, [themePreference]);
-
-  useEffect(() => {
-    document.documentElement.lang = languagePreference;
-    window.localStorage.setItem("executive-workbench-language", languagePreference);
-  }, [languagePreference]);
 
   useEffect(() => {
     if (!toast) return;
@@ -588,54 +577,54 @@ export function ProductionWorkspace({
     setToast("已重新进入受控处理流程");
   }
 
+  async function pushProfileUpdate(overrides: Partial<Omit<ExecutivePersonalProfile, "version" | "updated_at">>) {
+    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
+      salutation: overrides.salutation ?? profilePreferences.salutation,
+      amount_unit: overrides.amount_unit ?? profilePreferences.amountUnit,
+      response_style: overrides.response_style ?? profilePreferences.responseStyle,
+      locale: overrides.locale ?? (languagePreference === "en" ? "en-US" : languagePreference),
+      memory_enabled: overrides.memory_enabled ?? memoryEnabled,
+    }));
+    if (updated) {
+      setBootstrap((current) => ({
+        ...current,
+        personalProfile: updated,
+        me: {
+          ...current.me,
+          user: {
+            ...current.me.user,
+            locale: updated.locale,
+            memory_enabled: updated.memory_enabled,
+          },
+        },
+      }));
+    }
+    return updated;
+  }
+
   async function changeMemoryEnabled(value: boolean) {
     const previous = memoryEnabled;
     setMemoryEnabled(value);
-    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
-      salutation: profilePreferences.salutation,
-      amount_unit: profilePreferences.amountUnit,
-      response_style: profilePreferences.responseStyle,
-      locale: languagePreference === "en" ? "en-US" : languagePreference,
-      memory_enabled: value,
-    }));
+    const updated = await pushProfileUpdate({ memory_enabled: value });
     if (!updated) {
       setMemoryEnabled(previous);
       return;
     }
-    setBootstrap((current) => ({
-      ...current,
-      personalProfile: updated,
-      me: { ...current.me, user: { ...current.me.user, memory_enabled: updated.memory_enabled } },
-    }));
     setToast(value ? "长期记忆已开启" : "长期记忆已关闭");
   }
 
   async function saveProfilePreferences(value: ProfilePreferences) {
-    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
+    const updated = await pushProfileUpdate({
       salutation: value.salutation,
       amount_unit: value.amountUnit,
       response_style: value.responseStyle,
-      locale: languagePreference === "en" ? "en-US" : languagePreference,
-      memory_enabled: memoryEnabled,
-    }));
+    });
     if (!updated) return false;
     setProfilePreferences({
       salutation: updated.salutation,
       amountUnit: updated.amount_unit,
       responseStyle: updated.response_style,
     });
-    setBootstrap((current) => ({
-      ...current,
-      personalProfile: updated,
-      me: {
-        ...current.me,
-        user: {
-          ...current.me.user,
-          locale: updated.locale,
-          memory_enabled: updated.memory_enabled,
-        },
-      },
-    }));
     setToast("服务偏好已安全保存");
     return true;
   }
@@ -643,18 +632,10 @@ export function ProductionWorkspace({
   async function changeLanguage(value: UiLanguage) {
     const previous = languagePreference;
     setLanguagePreference(value);
-    const updated = await runRequest(() => productionServices.auth.updatePersonalProfile({
-      salutation: profilePreferences.salutation,
-      amount_unit: profilePreferences.amountUnit,
-      response_style: profilePreferences.responseStyle,
-      locale: value === "en" ? "en-US" : value,
-      memory_enabled: memoryEnabled,
-    }));
+    const updated = await pushProfileUpdate({ locale: value === "en" ? "en-US" : value });
     if (!updated) {
       setLanguagePreference(previous);
-      return;
     }
-    setBootstrap((current) => ({ ...current, personalProfile: updated }));
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {

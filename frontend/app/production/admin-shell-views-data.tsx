@@ -3,6 +3,14 @@
 import { FormEvent, useEffect, useState } from "react";
 import { humanizeApiError } from "./api-client";
 import { productionServices } from "./services";
+
+// MCP v2 通用工具列表 — 与后端 ``services.harness_config.MCP_V2_TOOLS`` 对齐。
+// 编辑器里直接把这三个名字列给用户，保证前端不会拿到过时的工具名。
+const MCP_V2_CANDIDATE_TOOLS = [
+  { tool_name: "discover_schema", display_name: "发现 Schema" },
+  { tool_name: "query_schema", display_name: "查询 Schema" },
+  { tool_name: "execute_query", display_name: "执行查询" },
+] as const;
 import type {
   DataOperationsV3Overview,
   DataSource,
@@ -14,7 +22,6 @@ import type {
   HarnessSimulation,
   HarnessTrace,
   HarnessVersion,
-  McpToolCatalog,
   ScheduledTask,
 } from "./types";
 import {
@@ -235,7 +242,6 @@ export function HarnessPolicyPanel() {
   const [versions, setVersions] = useState<HarnessVersion[]>([]);
   const [metrics, setMetrics] = useState<HarnessMetrics | null>(null);
   const [traces, setTraces] = useState<HarnessTrace[]>([]);
-  const [mcpCatalog, setMcpCatalog] = useState<McpToolCatalog | null>(null);
   const [question, setQuestion] = useState("本月华东与华南的回款差距主要来自哪些客户？");
   const [simulation, setSimulation] = useState<HarnessSimulation | null>(null);
   const [busy, setBusy] = useState<"save" | "simulate" | "restore" | "" | null>(null);
@@ -244,19 +250,17 @@ export function HarnessPolicyPanel() {
   const [activeModule, setActiveModule] = useState<HarnessModule>("rewrite");
 
   async function load() {
-    const [configResult, versionResult, metricResult, traceResult, toolResult] = await Promise.all([
+    const [configResult, versionResult, metricResult, traceResult] = await Promise.all([
       productionServices.adminHarness.get(),
       productionServices.adminHarness.versions(),
       productionServices.adminHarness.metrics(),
       productionServices.adminHarness.traces(),
-      productionServices.adminMcp.list(),
     ]);
     setCurrent(configResult);
     setDraft(copyHarnessConfig(configResult.config));
     setVersions(versionResult);
     setMetrics(metricResult);
     setTraces(traceResult);
-    setMcpCatalog(toolResult);
   }
 
   useEffect(() => {
@@ -266,15 +270,13 @@ export function HarnessPolicyPanel() {
       productionServices.adminHarness.versions(),
       productionServices.adminHarness.metrics(),
       productionServices.adminHarness.traces(),
-      productionServices.adminMcp.list(),
-    ]).then(([configResult, versionResult, metricResult, traceResult, toolResult]) => {
+    ]).then(([configResult, versionResult, metricResult, traceResult]) => {
       if (!active) return;
       setCurrent(configResult);
       setDraft(copyHarnessConfig(configResult.config));
       setVersions(versionResult);
       setMetrics(metricResult);
       setTraces(traceResult);
-      setMcpCatalog(toolResult);
     }).catch((loadError: unknown) => {
       if (active) setError(humanizeApiError(loadError));
     });
@@ -313,8 +315,8 @@ export function HarnessPolicyPanel() {
     if (!draft) return;
     const rule = draft.fast_rules[ruleIndex];
     const selected = rule.candidate_tools.includes(toolName);
-    if (!selected && rule.candidate_tools.length >= 4) {
-      setError("每条快速规则最多选择 4 个候选 MCP 工具。");
+    if (!selected && rule.candidate_tools.length >= MCP_V2_CANDIDATE_TOOLS.length) {
+      setError(`每条快速规则最多选择 ${MCP_V2_CANDIDATE_TOOLS.length} 个候选 MCP 工具。`);
       return;
     }
     updateRule(ruleIndex, {
@@ -376,7 +378,10 @@ export function HarnessPolicyPanel() {
   }
 
   const dirty = Boolean(current && draft && JSON.stringify(current.config) !== JSON.stringify(draft));
-  const plannerTools = mcpCatalog?.tools.filter((tool) => tool.is_enabled && tool.planner_enabled) ?? [];
+  // MCP v2: planner 永远只有 3 个通用工具 (discover_schema / query_schema /
+  // execute_query)。Web 层不再从 ``/admin/mcp-tools`` 拉工具列表，而是用
+  // 一个静态白名单与后端的 ``MCP_V2_TOOLS`` 一一对应。
+  const plannerTools = MCP_V2_CANDIDATE_TOOLS;
   const activePrompt = harnessPromptFields.find((field) => field.key === activeModule) ?? null;
 
   return (

@@ -163,6 +163,86 @@ export class ApiClient {
     }
     return payload as T;
   }
+
+  /**
+   * 发起流式请求并逐行产出 SSE 事件的 data 负载（字符串）。
+   * 复用 request 的 CSRF、headers 与错误处理逻辑；调用方负责解析 data 内容。
+   */
+  async *requestStream(path: string, options: ApiRequestOptions = {}): AsyncGenerator<string> {
+    const method = (options.method ?? "GET").toUpperCase();
+    const headers = new Headers(options.headers);
+    let body = options.body;
+
+    if (body != null && !isBodyInit(body)) {
+      headers.set("Content-Type", "application/json");
+      body = JSON.stringify(body);
+    }
+
+    if (!SAFE_METHODS.has(method) && !options.skipCsrf) {
+      const csrf = this.csrfToken ?? cookieValue(CSRF_COOKIE_NAME);
+      if (!csrf) {
+        throw new ApiError({
+          message: "安全令牌已失效，请重新登录。",
+          status: 403,
+          code: "csrf_token_missing",
+        });
+      }
+      headers.set(CSRF_HEADER_NAME, csrf);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`, {
+        ...options,
+        method,
+        headers,
+        body: body as BodyInit | null | undefined,
+        credentials: "include",
+        cache: "no-store",
+      });
+    } catch (error) {
+      throw new ApiError({
+        message: "暂时无法连接企业服务，请检查本机服务状态后重试。",
+        status: 0,
+        code: "network_error",
+        details: error,
+      });
+    }
+
+    if (!response.ok) {
+      const payload = await parseResponseBody(response);
+      const apiError = (payload ?? {}) as ApiErrorPayload;
+      throw new ApiError({
+        message: apiError.error?.message ?? `请求失败（${response.status}）`,
+        status: response.status,
+        code: apiError.error?.code ?? "request_failed",
+        requestId: apiError.error?.request_id ?? response.headers.get("x-request-id"),
+        details: apiError.error?.details,
+      });
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new ApiError({
+        message: "流式响应无内容。",
+        status: response.status,
+        code: "no_response_body",
+      });
+    }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        yield line.slice(6);
+      }
+    }
+  }
 }
 
 export function humanizeApiError(error: unknown) {

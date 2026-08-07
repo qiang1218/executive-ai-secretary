@@ -8,6 +8,13 @@ WORKDIR /app
 # 配置 npm 国内镜像源
 RUN npm config set registry https://registry.npmmirror.com
 
+# 构建期参数：NEXT_PUBLIC_* 在 build 时被固化进产物
+ARG NEXT_PUBLIC_API_BASE_URL=/api/v1
+ARG NEXT_PUBLIC_APP_MODE=production
+
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+ENV NEXT_PUBLIC_APP_MODE=${NEXT_PUBLIC_APP_MODE}
+
 # 先复制依赖清单，利用 Docker 缓存层
 COPY frontend/package.json frontend/package-lock.json* ./
 
@@ -32,9 +39,8 @@ COPY --from=builder /app/package.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.* ./
 
-# vinext 监听内部 3001 端口
+# vinext 监听内部 3001 端口（hostname 默认 0.0.0.0）
 EXPOSE 3001
 
 CMD ["npm", "run", "start", "--", "--port", "3001"]
@@ -46,9 +52,6 @@ FROM nginx:alpine AS final
 
 # 复制 nginx 配置
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
-
-# 复制 vinext 静态资源（由 nginx 直接提供）
-COPY --from=runner /app/public /app/public
 
 EXPOSE 3000
 

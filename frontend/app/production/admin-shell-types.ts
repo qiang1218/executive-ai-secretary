@@ -1,6 +1,6 @@
 import type { HarnessBusinessConfig } from "./types";
 
-export type AdminView = "models" | "harness" | "mcp" | "mcp_schema" | "data";
+export type AdminView = "models" | "harness" | "mcp_schema" | "data";
 
 export type DataOperationsView = "sources" | "runs" | "schedule" | "quality" | "policy";
 
@@ -20,12 +20,6 @@ export const guideContent: Record<AdminView, { eyebrow: string; title: string; s
     title: "策略可编辑，安全内核不可覆盖",
     summary: "这里决定问题如何理解、改写、规划和回答；每次保存生成独立版本。",
     principles: ["修改只影响新创建的消息任务", "工具白名单和事业部权限不可编辑", "先用问题模拟检查策略变化"],
-  },
-  mcp: {
-    eyebrow: "工具说明",
-    title: "工具是经营数据的唯一执行入口",
-    summary: "系统内置工具执行受审查询；企业组合工具只复用这些能力，不接收任意代码。",
-    principles: ["新工具默认停用", "校验数据域和依赖后再启用", "历史调用始终保留原工具标识"],
   },
   mcp_schema: {
     eyebrow: "Schema 说明",

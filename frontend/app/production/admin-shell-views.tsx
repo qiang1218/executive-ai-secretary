@@ -10,8 +10,6 @@ import type {
   McpSchemaRecord,
   McpSchemaUpdate,
   McpSchemaRefreshOut,
-  McpTool,
-  McpToolCatalog,
   ModelProviderConfig,
 } from "./types";
 import type { AdminView } from "./admin-shell-types";
@@ -190,224 +188,6 @@ export function ModelProviderPanel() {
     </main>
   );
 }
-
-export function McpToolsPanel() {
-  const [catalog, setCatalog] = useState<McpToolCatalog | null>(null);
-  const [selectedName, setSelectedName] = useState("");
-  const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [draft, setDraft] = useState({ display_name: "", description: "", timeout_seconds: 20, max_rows: 50, operator_note: "" });
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createDraft, setCreateDraft] = useState({ tool_name: "custom_", display_name: "", description: "", category: "综合经营", component_tools: [] as string[], operator_note: "" });
-
-  async function loadCatalog(preferredToolName?: string) {
-    const result = await productionServices.adminMcp.list();
-    setCatalog(result);
-    const next = result.tools.find((item) => item.tool_name === preferredToolName)
-      ?? result.tools.find((item) => item.tool_name === selectedName)
-      ?? result.tools[0];
-    setSelectedName(next?.tool_name ?? "");
-    if (next) {
-      setDraft({
-        display_name: next.display_name,
-        description: next.description,
-        timeout_seconds: next.timeout_seconds,
-        max_rows: next.max_rows,
-        operator_note: next.operator_note ?? "",
-      });
-    }
-  }
-
-  useEffect(() => {
-    let active = true;
-    productionServices.adminMcp.list().then((result) => {
-        if (!active) return;
-        setCatalog(result);
-        const first = result.tools[0];
-        setSelectedName(first?.tool_name ?? "");
-        if (first) {
-          setDraft({
-            display_name: first.display_name,
-            description: first.description,
-            timeout_seconds: first.timeout_seconds,
-            max_rows: first.max_rows,
-            operator_note: first.operator_note ?? "",
-          });
-        }
-      }).catch((loadError: unknown) => {
-        if (active) setError(humanizeApiError(loadError));
-      });
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    if (!createOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape" && !busy) setCreateOpen(false);
-    }
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [busy, createOpen]);
-
-  const selected = catalog?.tools.find((item) => item.tool_name === selectedName) ?? null;
-  const filtered = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    if (!keyword) return catalog?.tools ?? [];
-    return (catalog?.tools ?? []).filter((item) => `${item.display_name} ${item.tool_name} ${item.category}`.toLowerCase().includes(keyword));
-  }, [catalog, query]);
-
-  function mergeTool(tool: McpTool) {
-    setCatalog((current) => current ? {
-      ...current,
-      tools: current.tools.map((item) => item.tool_name === tool.tool_name ? tool : item),
-      enabled_count: current.tools.reduce((count, item) => count + (item.tool_name === tool.tool_name ? Number(tool.is_enabled) : Number(item.is_enabled)), 0),
-      planner_count: current.tools.reduce((count, item) => count + (item.tool_name === tool.tool_name ? Number(tool.is_enabled && tool.planner_enabled) : Number(item.is_enabled && item.planner_enabled)), 0),
-    } : current);
-    if (tool.tool_name === selectedName) {
-      setDraft({
-        display_name: tool.display_name,
-        description: tool.description,
-        timeout_seconds: tool.timeout_seconds,
-        max_rows: tool.max_rows,
-        operator_note: tool.operator_note ?? "",
-      });
-    }
-  }
-
-  function selectTool(tool: McpTool) {
-    setSelectedName(tool.tool_name);
-    setDraft({
-      display_name: tool.display_name,
-      description: tool.description,
-      timeout_seconds: tool.timeout_seconds,
-      max_rows: tool.max_rows,
-      operator_note: tool.operator_note ?? "",
-    });
-  }
-
-  async function updateTool(toolName: string, values: Parameters<typeof productionServices.adminMcp.update>[1], action: string) {
-    if (busy) return;
-    setBusy(action);
-    setError("");
-    setNotice("");
-    try {
-      mergeTool(await productionServices.adminMcp.update(toolName, values));
-      setNotice("MCP 工具配置已生效。后续规划会立即遵循这项边界。");
-    } catch (updateError) {
-      setError(humanizeApiError(updateError));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    if (!selected) return;
-    await updateTool(selected.tool_name, {
-      display_name: draft.display_name.trim(),
-      description: draft.description.trim(),
-      timeout_seconds: draft.timeout_seconds,
-      max_rows: draft.max_rows,
-      operator_note: draft.operator_note.trim() || null,
-    }, "save");
-  }
-
-  async function validate() {
-    if (!selected || busy) return;
-    setBusy("validate");
-    setError("");
-    setNotice("");
-    try {
-      const result = await productionServices.adminMcp.validate(selected.tool_name);
-      mergeTool(result.tool);
-      setNotice(result.ready ? "校验通过：工具配置与所需数据域均已就绪。" : result.issues.join("；"));
-    } catch (validationError) {
-      setError(humanizeApiError(validationError));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  function toggleComponent(toolName: string) {
-    setCreateDraft((current) => {
-      const selected = current.component_tools.includes(toolName);
-      if (!selected && current.component_tools.length >= 4) return current;
-      return {
-        ...current,
-        component_tools: selected
-          ? current.component_tools.filter((name) => name !== toolName)
-          : [...current.component_tools, toolName],
-      };
-    });
-  }
-
-  async function createCompositeTool(event: FormEvent) {
-    event.preventDefault();
-    if (busy || createDraft.component_tools.length === 0) return;
-    setBusy("create");
-    setError("");
-    setNotice("");
-    try {
-      const created = await productionServices.adminMcp.create({
-        tool_name: createDraft.tool_name.trim(),
-        display_name: createDraft.display_name.trim(),
-        description: createDraft.description.trim(),
-        category: createDraft.category.trim(),
-        component_tools: createDraft.component_tools,
-        operator_note: createDraft.operator_note.trim() || undefined,
-      });
-      await loadCatalog(created.tool_name);
-      setCreateOpen(false);
-      setCreateDraft({ tool_name: "custom_", display_name: "", description: "", category: "综合经营", component_tools: [], operator_note: "" });
-      setNotice("组合工具已创建并保持停用。完成就绪度校验后再启用执行与自动规划。");
-    } catch (createError) {
-      setError(humanizeApiError(createError));
-    } finally {
-      setBusy("");
-    }
-  }
-
-  const builtInTools = catalog?.tools.filter((tool) => tool.source_type === "built_in") ?? [];
-
-  return (
-    <main className="production-admin-main mcp-admin-main">
-      <header className="production-admin-heading">
-        <div><p>执行能力</p><h1>MCP 工具注册表</h1><span>只开放经过审计的经营工具；查询规划、意图路由和后续 Skill 共用同一配置。</span></div>
-        <div className="production-admin-heading-actions"><span className="production-admin-status positive"><i aria-hidden="true" />{catalog ? `${catalog.enabled_count} / ${catalog.tools.length} 已启用` : "正在读取"}</span><button className="primary-button" type="button" onClick={() => { setError(""); setNotice(""); setCreateOpen(true); }}>新增工具</button></div>
-      </header>
-      <section className="mcp-boundary-note"><strong>受控边界</strong><span>可以新增由 1–4 个系统工具组成的企业组合工具；仍不接受任意 SQL、脚本或外部地址。</span></section>
-      <div className="mcp-registry-layout">
-        <section className="mcp-tool-index" aria-label="MCP 工具列表">
-          <header><div><strong>工具</strong><small>{catalog ? `${catalog.planner_count} 个可被规划器选择` : "加载中"}</small></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索工具" aria-label="搜索 MCP 工具" /></header>
-          <div>{filtered.map((tool) => <article className={selectedName === tool.tool_name ? "selected" : ""} key={tool.tool_name}><button type="button" onClick={() => selectTool(tool)}><span><strong>{tool.display_name}</strong><small>{tool.tool_name}</small><em>{tool.source_type === "composite" ? "企业组合" : "系统内置"}</em></span><i className={`mcp-readiness ${tool.readiness}`} title={tool.readiness_issues.join("；")} aria-label={tool.readiness} /></button><label className="switch mcp-inline-switch" title="启用工具"><input type="checkbox" checked={tool.is_enabled} disabled={Boolean(busy)} onChange={(event) => void updateTool(tool.tool_name, { is_enabled: event.target.checked }, `enable:${tool.tool_name}`)} /><span aria-hidden="true" /></label></article>)}</div>
-          {!filtered.length && <p className="mcp-empty">没有匹配的工具。</p>}
-        </section>
-        <section className="mcp-tool-detail" aria-live="polite">
-          {!selected ? <div className="anspire-loading">请选择一个 MCP 工具。</div> : <form onSubmit={save}>
-            <header><div><small>{selected.category} · {selected.source_type === "composite" ? "企业组合" : "系统内置"}</small><h2>{selected.display_name}</h2><code>{selected.tool_name} · v{selected.definition_version}</code></div><span className={`mcp-detail-status ${selected.readiness}`}>{selected.readiness === "ready" ? "可运行" : selected.readiness === "disabled" ? "已停用" : "数据未就绪"}</span></header>
-            <div className="mcp-tool-controls"><label><span>允许执行</span><span className="switch"><input type="checkbox" checked={selected.is_enabled} disabled={Boolean(busy)} onChange={(event) => void updateTool(selected.tool_name, { is_enabled: event.target.checked }, "enable")} /><span aria-hidden="true" /></span><small>关闭后，MCP Hub 会直接拒绝调用。</small></label><label><span>允许自动规划</span><span className="switch"><input type="checkbox" checked={selected.planner_enabled} disabled={Boolean(busy) || !selected.is_enabled} onChange={(event) => void updateTool(selected.tool_name, { planner_enabled: event.target.checked }, "planner")} /><span aria-hidden="true" /></span><small>关闭后仍可保留工具，但 Harness 不会自动选择。</small></label></div>
-            <div className="mcp-tool-form"><label><span>显示名称</span><input value={draft.display_name} maxLength={160} onChange={(event) => setDraft((current) => ({ ...current, display_name: event.target.value }))} /></label><label className="wide"><span>用途说明</span><textarea rows={3} value={draft.description} maxLength={2000} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} /></label><label><span>超时（秒）</span><input type="number" min={3} max={60} value={draft.timeout_seconds} onChange={(event) => setDraft((current) => ({ ...current, timeout_seconds: Number(event.target.value) }))} /></label><label><span>最大返回行数</span><input type="number" min={1} max={100} value={draft.max_rows} onChange={(event) => setDraft((current) => ({ ...current, max_rows: Number(event.target.value) }))} /></label><label className="wide"><span>运维备注</span><textarea rows={2} value={draft.operator_note} maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, operator_note: event.target.value }))} placeholder="仅管理端可见" /></label></div>
-            <section className="mcp-schema"><header><strong>规划器可用参数</strong><small>{selected.domains.length ? `依赖数据域：${selected.domains.join("、")}` : "不依赖经营事实"}</small></header><div>{Object.entries(selected.parameters).map(([name, schema]) => <span key={name}><code>{name}</code><small>{String(schema.description ?? schema.type ?? "参数")}</small></span>)}{!Object.keys(selected.parameters).length && <p>该工具不接受可变业务参数，查询范围由权限令牌注入。</p>}</div></section>
-            {selected.source_type === "composite" && <section className="mcp-composition"><header><strong>组合执行</strong><small>按依赖工具各自的权限与返回边界执行</small></header><div>{selected.component_tools.map((name, index) => <span key={name}><i>{String(index + 1).padStart(2, "0")}</i><strong>{catalog?.tools.find((tool) => tool.tool_name === name)?.display_name ?? name}</strong><code>{name}</code></span>)}</div></section>}
-            {selected.readiness_issues.length > 0 && <p className="anspire-error" role="alert">{selected.readiness_issues.join("；")}</p>}
-            {error && <p className="anspire-error" role="alert">{error}</p>}
-            {notice && <p className="anspire-notice" role="status">{notice}</p>}
-            <footer><span>配置变更会写入审计日志，并由规划器和 MCP Hub 同时执行。</span><div><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void validate()}>{busy === "validate" ? "正在校验…" : "校验就绪度"}</button><button className="primary-button" type="submit" disabled={Boolean(busy) || !draft.display_name.trim() || !draft.description.trim()}>{busy === "save" ? "正在保存…" : "保存配置"}</button></div></footer>
-          </form>}
-        </section>
-      </div>
-      {createOpen && <div className="mcp-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setCreateOpen(false); }}><section className="mcp-create-dialog" role="dialog" aria-modal="true" aria-labelledby="mcp-create-title"><header><div><small>企业组合工具</small><h2 id="mcp-create-title">新增 MCP 工具</h2><p>组合已有的受审查询能力，不创建新的 SQL 或外部连接。</p></div><button type="button" disabled={Boolean(busy)} onClick={() => setCreateOpen(false)} aria-label="关闭">×</button></header><form onSubmit={createCompositeTool}><div className="mcp-create-grid"><label><span>工具名称</span><input value={createDraft.display_name} maxLength={160} autoFocus onChange={(event) => setCreateDraft((current) => ({ ...current, display_name: event.target.value }))} placeholder="例如：重点客户风险体检" /></label><label><span>工具标识</span><input value={createDraft.tool_name} maxLength={64} spellCheck={false} onChange={(event) => setCreateDraft((current) => ({ ...current, tool_name: event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "" ) }))} /><small>必须以 custom_ 开头，发布后不可修改。</small></label><label><span>业务分类</span><input value={createDraft.category} maxLength={80} onChange={(event) => setCreateDraft((current) => ({ ...current, category: event.target.value }))} /></label><label className="wide"><span>用途说明</span><textarea rows={3} value={createDraft.description} maxLength={2000} onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))} placeholder="说明规划器何时应使用这个工具，以及它能够回答什么问题。" /></label></div><fieldset className="mcp-component-picker"><legend>选择组成工具 <small>{createDraft.component_tools.length} / 4</small></legend><p>执行时会自动合并共同参数、数据时间和数字证据。</p><div>{builtInTools.map((tool) => { const checked = createDraft.component_tools.includes(tool.tool_name); return <label className={checked ? "selected" : ""} key={tool.tool_name}><input type="checkbox" checked={checked} disabled={!checked && createDraft.component_tools.length >= 4} onChange={() => toggleComponent(tool.tool_name)} /><span><strong>{tool.display_name}</strong><small>{tool.category} · {tool.domains.join("、") || "权限范围"}</small></span><i aria-hidden="true">{checked ? "✓" : "+"}</i></label>; })}</div></fieldset><label className="mcp-create-note"><span>运维备注</span><textarea rows={2} value={createDraft.operator_note} maxLength={500} onChange={(event) => setCreateDraft((current) => ({ ...current, operator_note: event.target.value }))} placeholder="仅管理员可见，可留空" /></label>{error && <p className="anspire-error" role="alert">{error}</p>}<footer><p>创建后默认停用。请先校验依赖工具和数据域，再手动启用。</p><div><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setCreateOpen(false)}>取消</button><button className="primary-button" type="submit" disabled={Boolean(busy) || !createDraft.tool_name.match(/^custom_[a-z0-9_]+$/) || !createDraft.display_name.trim() || createDraft.description.trim().length < 12 || !createDraft.category.trim() || createDraft.component_tools.length === 0}>{busy === "create" ? "正在创建…" : "创建工具"}</button></div></footer></form></section></div>}
-    </main>
-  );
-}
-
 // ══════════════════════════════════════════════════════════
 // MCP v2 Schema 管理面板
 // ══════════════════════════════════════════════════════════
@@ -422,8 +202,7 @@ export function McpSchemaPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    productionServices()
-      .then((s) => s.adminMcpSchema.list())
+    productionServices.adminMcpSchema.list()
       .then((data) => { if (!cancelled) setCatalog(data); })
       .catch((err) => { if (!cancelled) setError(humanizeApiError(err)); });
     return () => { cancelled = true; };
@@ -451,8 +230,7 @@ export function McpSchemaPanel() {
     setError("");
     setNotice("");
     try {
-      const services = await productionServices();
-      const updated = await services.adminMcpSchema.update(tableName, values);
+      const updated = await productionServices.adminMcpSchema.update(tableName, values);
       setCatalog((prev) => {
         if (!prev) return prev;
         return {
@@ -475,14 +253,13 @@ export function McpSchemaPanel() {
     setError("");
     setNotice("");
     try {
-      const services = await productionServices();
-      const result = await services.adminMcpSchema.refresh(tableName);
+      const result = await productionServices.adminMcpSchema.refresh(tableName);
       if (result.error) {
         setError(`刷新失败：${result.error}`);
       } else {
         setNotice(`刷新成功，发现 ${result.columns_discovered} 列（v${result.schema_version}）`);
         // 重新加载 catalog
-        const data = await services.adminMcpSchema.list();
+        const data = await productionServices.adminMcpSchema.list();
         setCatalog(data);
       }
     } catch (err) {
@@ -497,8 +274,7 @@ export function McpSchemaPanel() {
     setError("");
     setNotice("");
     try {
-      const services = await productionServices();
-      const data = await services.adminMcpSchema.refreshAll();
+      const data = await productionServices.adminMcpSchema.refreshAll();
       setCatalog(data);
       setNotice(`刷新完成，共 ${data.total} 张表`);
     } catch (err) {

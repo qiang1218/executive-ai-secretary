@@ -24,9 +24,6 @@ import type {
   HarnessVersion,
   Job,
   Memory,
-  McpTool,
-  McpToolCatalog,
-  McpCompositeToolCreate,
   McpSchemaRecord,
   McpSchemaCatalog,
   McpSchemaUpdate,
@@ -200,42 +197,18 @@ export function createProductionServices(client: ApiClient = apiClient) {
       organizationScope: OrganizationScope,
       modelId: string,
     ): AsyncGenerator<{ type: string; content?: string; message_id?: string; error?: string; tool?: string; args?: unknown; result?: unknown }> {
-      // 从 cookie 读取 CSRF token（与 ApiClient.request 逻辑一致）
-      const csrfCookie = document.cookie
-        .split(";")
-        .map((v) => v.trim())
-        .find((v) => v.startsWith("exec_csrf="));
-      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.slice("exec_csrf=".length)) : "";
-      const response = await fetch(`${client.baseUrl}/conversations/${encodeURIComponent(id)}/messages`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
-          ...idempotencyHeaders(),
+      for await (const data of client.requestStream(
+        `/conversations/${encodeURIComponent(id)}/messages`,
+        {
+          method: "POST",
+          headers: idempotencyHeaders(),
+          body: { content, file_ids: [], organization_scope: organizationScope, model_id: modelId },
         },
-        body: JSON.stringify({ content, file_ids: [], organization_scope: organizationScope, model_id: modelId }),
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("no response body");
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            yield JSON.parse(line.slice(6));
-          } catch {
-            // skip malformed line
-          }
+      )) {
+        try {
+          yield JSON.parse(data);
+        } catch {
+          // skip malformed line
         }
       }
     },
@@ -397,30 +370,6 @@ export function createProductionServices(client: ApiClient = apiClient) {
     },
   };
 
-  const adminMcp = {
-    async list() {
-      return client.request<McpToolCatalog>("/admin/mcp-tools");
-    },
-    async update(toolName: string, values: Partial<Pick<McpTool, "display_name" | "description" | "is_enabled" | "planner_enabled" | "timeout_seconds" | "max_rows" | "operator_note">>) {
-      return client.request<McpTool>(`/admin/mcp-tools/${encodeURIComponent(toolName)}`, {
-        method: "PATCH",
-        body: values,
-      });
-    },
-    async create(values: McpCompositeToolCreate) {
-      return client.request<McpTool>("/admin/mcp-tools", {
-        method: "POST",
-        body: values,
-      });
-    },
-    async validate(toolName: string) {
-      return client.request<{ tool: McpTool; ready: boolean; issues: string[] }>(
-        `/admin/mcp-tools/${encodeURIComponent(toolName)}/validate`,
-        { method: "POST" },
-      );
-    },
-  };
-
   // ── MCP v2 Schema 管理 ────────────────────────────────
   const adminMcpSchema = {
     async list() {
@@ -553,7 +502,7 @@ export function createProductionServices(client: ApiClient = apiClient) {
     },
   };
 
-  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcp, adminMcpSchema, adminData };
+  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcpSchema, adminData };
 }
 
 export type ProductionServices = ReturnType<typeof createProductionServices>;

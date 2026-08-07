@@ -25,7 +25,7 @@ WAITED=0
 while ! python -c "
 import sys, psycopg
 try:
-    conn = psycopg.connect('${DATABASE_URL}'.replace('+psycopg',''), connect_timeout=3)
+    conn = psycopg.connect('${DATABASE_URL}'.replace('postgresql+asyncpg://','postgresql://').replace('+psycopg',''), connect_timeout=3)
     conn.close()
 except Exception:
     sys.exit(1)

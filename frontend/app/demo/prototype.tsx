@@ -48,6 +48,7 @@ import {
   workspaceNavigation,
 } from "./prototype-constants";
 import {
+  classifyQuestion,
   copyToClipboard,
   demoReadyFile,
   fileRange,
@@ -79,19 +80,12 @@ import {
   UiIcon,
   WeeklyBriefView,
 } from "./prototype-components";
+import { useThemePreference, useLanguagePreference } from "../shared/use-preferences";
 
 export function DemoProductPrototype() {
   const [role, setRole] = useState<AuthRole>(null);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(() => {
-    if (typeof window === "undefined") return "system";
-    const savedTheme = window.localStorage.getItem("executive-workbench-theme");
-    return savedTheme === "light" || savedTheme === "dark" || savedTheme === "system" ? savedTheme : "system";
-  });
-  const [languagePreference, setLanguagePreference] = useState<UiLanguage>(() => {
-    if (typeof window === "undefined") return "zh-CN";
-    const savedLanguage = window.localStorage.getItem("executive-workbench-language");
-    return savedLanguage === "zh-TW" || savedLanguage === "en" || savedLanguage === "zh-CN" ? savedLanguage : "zh-CN";
-  });
+  const [themePreference, setThemePreference] = useThemePreference();
+  const [languagePreference, setLanguagePreference] = useLanguagePreference();
   const [mode, setMode] = useState<LoginMode>("executive");
   const [step, setStep] = useState<AuthStep>("login");
   const [account, setAccount] = useState("chairman");
@@ -103,17 +97,6 @@ export function DemoProductPrototype() {
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
   const [pendingDestination, setPendingDestination] = useState<ExecutiveView>("home");
   const [pendingConversationId, setPendingConversationId] = useState<number | null>(null);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = themePreference;
-    document.documentElement.style.colorScheme = themePreference === "system" ? "light dark" : themePreference;
-    window.localStorage.setItem("executive-workbench-theme", themePreference);
-  }, [themePreference]);
-
-  useEffect(() => {
-    document.documentElement.lang = languagePreference;
-    window.localStorage.setItem("executive-workbench-language", languagePreference);
-  }, [languagePreference]);
 
   function switchMode(nextMode: LoginMode) {
     setMode(nextMode);
@@ -685,21 +668,6 @@ function ExecutiveWorkspace({
     setActivePanel(null);
     setSidebarOpen(false);
     setView("home");
-  }
-
-  function classifyQuestion(question: string): { route: RouteKind; answerId: string } {
-    if (/这份|文件|报告里|刚才上传|工作表|幻灯片/.test(question)) return { route: "file", answerId: "file" };
-    if (/搜索|公开|行业|竞争对手|竞品|市场/.test(question)) return { route: "research", answerId: "research" };
-    if (/写|整理|备忘录|邮件|讲话|会议总结|汇报/.test(question)) return { route: "general", answerId: "general" };
-    if (/延期.*回款|项目.*回款|回款.*项目|哪些项目可能延期/.test(question)) return { route: "data", answerId: "delivery" };
-    if (/回款|应收|现金/.test(question)) return { route: "data", answerId: "collection" };
-    if (/负责人|事业部|部门|谁的|谁最好|谁风险|谁.*推进|华东|华南|北区/.test(question)) return { route: "data", answerId: "organization" };
-    if (/预测|大概能签|能签多少/.test(question)) return { route: "data", answerId: "forecast" };
-    if (/重点客户|客户现在/.test(question)) return { route: "data", answerId: "customers" };
-    if (/为什么|原因|下降|变化/.test(question)) return { route: "data", answerId: "change" };
-    if (/目标|完成多少|差距/.test(question)) return { route: "data", answerId: "target" };
-    if (/项目|交付|里程碑/.test(question)) return { route: "data", answerId: "delivery" };
-    return { route: "data", answerId: "overview" };
   }
 
   function addRouteRecord(route: RouteKind, summary: string, status: RouteRecord["status"]) {

@@ -26,6 +26,7 @@ import {
   type ThemePreference,
   type UiLanguage,
   type WorkspacePanel,
+  copy,
 } from "./workspace-types";
 import {
   dailyBriefDataAsOf,
@@ -242,6 +243,7 @@ function ProductionScopePanel({
 }
 
 function ProductionDailyBriefPanel({ brief, language }: { brief: DailyBrief; language: UiLanguage }) {
+  const c = copy[language];
   const asOf = dailyBriefDataAsOf(brief);
   const canConcludeNoItems = brief.readiness === "ready" || brief.readiness === "stale";
   const domainLabel = (domain: string) => domainLabels[domain] ?? domain;
@@ -250,26 +252,22 @@ function ProductionDailyBriefPanel({ brief, language }: { brief: DailyBrief; lan
     if (language === "zh-TW") return readiness === "ready" ? "已就緒" : readiness === "stale" ? "數據較早" : readiness === "partial" ? "部分可用" : "暫不可用";
     return readiness === "ready" ? "已就绪" : readiness === "stale" ? "数据较早" : readiness === "partial" ? "部分可用" : "暂不可用";
   };
-  const metaLabel = language === "en" ? "Morning executive brief" : language === "zh-TW" ? "晨間經營摘要" : "晨间经营摘要";
-  const explanation = language === "en"
-    ? "Only material items that require an executive confirmation are shown here."
-    : language === "zh-TW"
-      ? "僅呈現需要高層確認的實質事項，不以普通變化補足數量。"
-      : "仅呈现需要高层确认的实质事项，不以普通变化补足数量。";
+  const metaLabel = c.briefMetaLabel;
+  const explanation = c.briefExplanation;
 
   return (
     <article className="executive-report production-executive-report daily live-daily-brief">
       <header className="executive-report-lead">
         <div className="executive-report-meta">
           <div><span>{metaLabel}</span><time>{brief.brief_date ? formatDate(brief.brief_date, language) : "—"}</time></div>
-          <p>{asOf ? `${language === "en" ? "Data through" : language === "zh-TW" ? "數據截至" : "数据截至"} ${formatTimestamp(asOf, language)}` : readinessLabel(brief.readiness)}</p>
+          <p>{asOf ? `${c.dataThrough} ${formatTimestamp(asOf, language)}` : readinessLabel(brief.readiness)}</p>
         </div>
         <h1>{dailyBriefHeadline(brief, language)}</h1>
         <p>{explanation}</p>
       </header>
 
       {brief.items.length > 0 ? (
-        <section className="live-daily-brief-items" aria-label={language === "en" ? "Items needing attention" : "需要确认的事项"}>
+        <section className="live-daily-brief-items" aria-label={c.itemsAttention}>
           {brief.items.map((item) => (
             <article key={item.rule_id}>
               <span className="morning-brief-dot" aria-hidden="true" />
@@ -279,16 +277,16 @@ function ProductionDailyBriefPanel({ brief, language }: { brief: DailyBrief; lan
           ))}
         </section>
       ) : canConcludeNoItems ? (
-        <section className="live-daily-brief-clear"><span aria-hidden="true">✓</span><p>{language === "en" ? "No material confirmation item was identified for the current scope." : language === "zh-TW" ? "目前範圍內未識別到需要確認的重大事項。" : "当前范围内未识别到需要确认的重大事项。"}</p></section>
+        <section className="live-daily-brief-clear"><span aria-hidden="true">✓</span><p>{c.noItemsClear}</p></section>
       ) : (
-        <section className="live-daily-brief-clear uncertain"><span aria-hidden="true">!</span><p>{language === "en" ? "The current data is incomplete, so the system cannot confirm that there are no action items." : language === "zh-TW" ? "目前數據不完整，暫不能確認沒有需要處理的事項。" : "当前数据不完整，暂不能确认没有需要处理的事项。"}</p></section>
+        <section className="live-daily-brief-clear uncertain"><span aria-hidden="true">!</span><p>{c.noItemsUncertain}</p></section>
       )}
 
       <details className="executive-report-provenance">
-        <summary>{language === "en" ? "Data scope and readiness" : language === "zh-TW" ? "數據範圍與就緒度" : "数据范围与就绪度"}</summary>
+        <summary>{c.dataScopeReadiness}</summary>
         <dl>
-          <div><dt>{language === "en" ? "Scope" : "范围"}</dt><dd>{brief.uses_enterprise_snapshot ? (language === "en" ? "All authorized business units" : language === "zh-TW" ? "全部授權事業部" : "全部授权事业部") : language === "en" ? `${brief.organization_unit_ids.length} business units` : language === "zh-TW" ? `${brief.organization_unit_ids.length} 個事業部` : `${brief.organization_unit_ids.length} 个事业部`}</dd></div>
-          {brief.domains.map((domain) => <div key={domain.domain}><dt>{domainLabel(domain.domain)}</dt><dd>{readinessLabel(domain.readiness)} · {domain.record_count.toLocaleString(language)}{language === "en" ? " records" : language === "zh-TW" ? " 條" : " 条"}{domain.data_as_of ? ` · ${formatTimestamp(domain.data_as_of, language)}` : ""}</dd></div>)}
+          <div><dt>{c.scopeLabel}</dt><dd>{brief.uses_enterprise_snapshot ? c.allAuthorizedUnits : `${brief.organization_unit_ids.length}${c.unitCountSuffix}`}</dd></div>
+          {brief.domains.map((domain) => <div key={domain.domain}><dt>{domainLabel(domain.domain)}</dt><dd>{readinessLabel(domain.readiness)} · {domain.record_count.toLocaleString(language)}{c.recordsSuffix}{domain.data_as_of ? ` · ${formatTimestamp(domain.data_as_of, language)}` : ""}</dd></div>)}
         </dl>
       </details>
     </article>
@@ -396,11 +394,15 @@ export function PreferencesWindow({
   const [responseStyle, setResponseStyle] = useState(profilePreferences.responseStyle);
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
-  const labels = language === "en"
-    ? { title: "Personal settings", back: "Back to workspace", profile: "Profile", appearance: "Appearance", memory: "Long-term memory", close: "Close" }
-    : language === "zh-TW"
-      ? { title: "個人設定", back: "返回工作台", profile: "個人資料", appearance: "外觀", memory: "長期記憶", close: "關閉" }
-      : { title: "个人设置", back: "返回工作台", profile: "个人资料", appearance: "外观", memory: "长期记忆", close: "关闭" };
+  const c = copy[language];
+  const labels = {
+    title: c.prefsTitle,
+    back: c.prefsBack,
+    profile: c.profile,
+    appearance: c.appearance,
+    memory: c.memory,
+    close: c.prefsClose,
+  };
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
