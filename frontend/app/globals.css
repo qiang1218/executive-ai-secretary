@@ -462,6 +462,30 @@ fieldset legend {
   background: var(--surface);
 }
 
+/* 刷新时的轻量启动屏，避免把加载状态误认为登录页 */
+.app-splash {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+}
+
+.app-splash-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-top-color: var(--accent, #2563eb);
+  animation: app-splash-spin 0.7s linear infinite;
+}
+
+@keyframes app-splash-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .login-context {
   display: flex;
   min-height: 100%;

@@ -572,11 +572,13 @@ export const productionServices = createProductionServices();
 
 export async function loadProductionBootstrap(
   services: ProductionServices = productionServices,
+  me?: AuthMe,
 ): Promise<ProductionBootstrap> {
-  const me = await services.auth.me();
-  if (me.user.password_change_required) {
+  // 如果调用方已获取过 me（如 loadProductionBootstrapFast），直接复用，避免重复请求
+  const resolvedMe = me ?? await services.auth.me();
+  if (resolvedMe.user.password_change_required) {
     return {
-      me,
+      me: resolvedMe,
       organizationUnits: [],
       conversations: [],
       projects: [],
@@ -593,9 +595,9 @@ export async function loadProductionBootstrap(
 
   // Keep the executive workspace and its resources isolated from management
   // sessions. Enterprise administrators and FDEs use separate APIs/surfaces.
-  if (me.user.role !== "executive") {
+  if (resolvedMe.user.role !== "executive") {
     return {
-      me,
+      me: resolvedMe,
       organizationUnits: [],
       conversations: [],
       projects: [],
@@ -640,7 +642,7 @@ export async function loadProductionBootstrap(
     services.auth.personalProfile(),
     services.models.list(),
   ] as const);
-  const authorizedOrganizationIds = new Set(me.scopes.map((scope) => scope.id));
+  const authorizedOrganizationIds = new Set(resolvedMe.scopes.map((scope) => scope.id));
   const optionalKeys = ["memories", "reports", "jobs", "dataCapabilities", "dailyBrief", "personalProfile", "authorizedModels"] as const;
   optional.forEach((result, index) => {
     if (result.status === "rejected") {
@@ -649,7 +651,7 @@ export async function loadProductionBootstrap(
   });
 
   return {
-    me,
+    me: resolvedMe,
     organizationUnits: organizations.filter(
       (unit) => authorizedOrganizationIds.has(unit.id) && unit.enabled_for_analysis && unit.data_connected,
     ),
@@ -665,3 +667,58 @@ export async function loadProductionBootstrap(
     optionalErrors,
   };
 }
+
+/**
+ * 快速启动：只等 /auth/me 完成就返回一个"空壳" bootstrap，
+ * 其余数据在后台异步加载（返回的 refreshPromise 完成后更新）。
+ *
+ * 这样用户刷新页面时只需等待 ~100ms（auth.me 网络往返），
+ * 而不是等 10 个 API 请求全部完成。
+ */
+export async function loadProductionBootstrapFast(
+  services: ProductionServices = productionServices,
+): Promise<{ bootstrap: ProductionBootstrap; refreshPromise: Promise<ProductionBootstrap> }> {
+  const me = await services.auth.me();
+
+  // 如果需要改密码或不是 executive，直接返回空壳（和原逻辑一致）
+  if (me.user.password_change_required || me.user.role !== "executive") {
+    const emptyBootstrap: ProductionBootstrap = {
+      me,
+      organizationUnits: [],
+      conversations: [],
+      projects: [],
+      authorizedModels: [],
+      memories: [],
+      reports: [],
+      jobs: [],
+      dataCapabilities: null,
+      dailyBrief: null,
+      personalProfile: null,
+      optionalErrors: {},
+    };
+    return { bootstrap: emptyBootstrap, refreshPromise: Promise.resolve(emptyBootstrap) };
+  }
+
+  // 先返回空壳 bootstrap，让工作台立即渲染
+  const skeletonBootstrap: ProductionBootstrap = {
+    me,
+    organizationUnits: [],
+    conversations: [],
+    projects: [],
+    authorizedModels: [],
+    memories: [],
+    reports: [],
+    jobs: [],
+    dataCapabilities: null,
+    dailyBrief: null,
+    personalProfile: null,
+    optionalErrors: {},
+  };
+
+  // 后台加载完整数据（复用原 loadProductionBootstrap 的逻辑，
+  // 传入已获取的 me，不重复请求 /auth/me）
+  const refreshPromise = loadProductionBootstrap(services, me).catch(() => skeletonBootstrap);
+
+  return { bootstrap: skeletonBootstrap, refreshPromise };
+}
+

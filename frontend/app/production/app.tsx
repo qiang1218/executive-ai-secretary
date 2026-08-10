@@ -9,6 +9,7 @@ import {
 import { ApiError, humanizeApiError } from "./api-client";
 import {
   loadProductionBootstrap,
+  loadProductionBootstrapFast,
   productionServices,
 } from "./services";
 import { ProductionWorkspace } from "./workspace";
@@ -48,14 +49,25 @@ export function ProductionApplication() {
 
   useEffect(() => {
     let active = true;
-    void loadProductionBootstrap()
-      .then((bootstrap) => {
+    // 快速启动：只等 /auth/me 完成，不等 10 个 bootstrap 请求全部完成。
+    // 这样用户刷新时几乎无感（~100ms），工作台用空数据先渲染，
+    // 后台再异步加载剩余数据并更新。
+    void loadProductionBootstrapFast()
+      .then(({ bootstrap, refreshPromise }) => {
         if (!active) return;
         if (bootstrap.me.user.password_change_required) {
           setSession({ status: "password-change", me: bootstrap.me, currentPassword: "" });
-        } else {
-          setSession({ status: "ready", bootstrap });
+          return;
         }
+        // 立即进入工作台（空数据），后台数据加载后自动更新
+        setSession({ status: "ready", bootstrap });
+        // 后台加载完成后更新 bootstrap（通过 workspace 的 onReload 机制）
+        refreshPromise.then((full) => {
+          if (!active) return;
+          setSession({ status: "ready", bootstrap: full });
+        }).catch(() => {
+          // 后台加载失败不阻塞，workspace 已有降级处理
+        });
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -71,7 +83,7 @@ export function ProductionApplication() {
   }, []);
 
   if (session.status === "checking") {
-    return <ProductionStatus title="正在验证安全会话" description="正在连接本机生产服务，请稍候。" />;
+    return <ProductionSplash />;
   }
   if (session.status === "error") {
     return <ProductionStatus title="暂时无法进入工作台" description={session.message} action="重新连接" onAction={() => void refresh()} />;
@@ -121,6 +133,18 @@ export function ProductionApplication() {
       onSessionExpired={() => setSession({ status: "anonymous" })}
       onReload={refresh}
     />
+  );
+}
+
+/**
+ * 刷新时的轻量启动屏：全屏加载动画，不使用 login-page 样式。
+ * 避免用户把加载状态误认为"跳到了登录页"。
+ */
+function ProductionSplash() {
+  return (
+    <main className="app-splash" data-app-mode="production">
+      <div className="app-splash-spinner" aria-label="正在加载" />
+    </main>
   );
 }
 function ProductionStatus({
