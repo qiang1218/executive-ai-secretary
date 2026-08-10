@@ -41,23 +41,41 @@ async def get_pool() -> asyncpg.Pool:
         dsn = os.environ.get("DATABASE_URL", "")
         if not dsn:
             raise RuntimeError("DATABASE_URL environment variable is not set")
+        # asyncpg 只接受 postgresql:// / postgres://，去掉 SQLAlchemy 的驱动后缀
+        dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
         _pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
     return _pool
+
+
+def _get_enterprise_id() -> str:
+    """从环境变量读取企业 ID（由 API 侧通过 mcp_servers.env 注入）。
+
+    多企业隔离的关键：MCP server 子进程通过此 env 限定数据范围，
+    避免跨企业串库。缺失时返回空串，SQL 会匹配不到任何行（安全失败）。
+    """
+    return os.environ.get("ENTERPRISE_ID", "").strip()
 
 
 # ── 工具 1：discover_schema ────────────────────────────────
 
 async def handle_discover_schema(_params: dict) -> dict:
     """列出可用表及简介。"""
+    enterprise_id = _get_enterprise_id()
+    if not enterprise_id:
+        return {"tables": [], "error": "ENTERPRISE_ID not configured"}
+
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
+        rows = await conn.fetch(
+            """
             SELECT table_name, display_name, description, category,
                    is_enabled, max_rows, query_timeout_seconds
             FROM mcp_schema_registry
-            WHERE is_enabled = true
+            WHERE is_enabled = true AND enterprise_id = $1
             ORDER BY category, display_name
-        """)
+            """,
+            enterprise_id,
+        )
     return {
         "tables": [
             {
@@ -81,11 +99,17 @@ async def handle_query_schema(params: dict) -> dict:
     if not table_name:
         return {"error": "table_name is required"}
 
+    enterprise_id = _get_enterprise_id()
+    if not enterprise_id:
+        return {"error": "ENTERPRISE_ID not configured"}
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM mcp_schema_registry WHERE table_name = $1 AND is_enabled = true",
+            "SELECT * FROM mcp_schema_registry "
+            "WHERE table_name = $1 AND is_enabled = true AND enterprise_id = $2",
             table_name,
+            enterprise_id,
         )
         if row is None:
             return {"error": f"Table '{table_name}' not found or not enabled"}
@@ -152,10 +176,16 @@ async def handle_execute_query(params: dict) -> dict:
     if not referenced_tables:
         return {"error": "No table references found in SQL"}
 
+    enterprise_id = _get_enterprise_id()
+    if not enterprise_id:
+        return {"error": "ENTERPRISE_ID not configured"}
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         allowed = await conn.fetch(
-            "SELECT table_name FROM mcp_schema_registry WHERE is_enabled = true"
+            "SELECT table_name FROM mcp_schema_registry "
+            "WHERE is_enabled = true AND enterprise_id = $1",
+            enterprise_id,
         )
         allowed_names = {r["table_name"].lower() for r in allowed}
 
@@ -241,97 +271,90 @@ HANDLERS = {
 
 
 async def main() -> None:
-    """MCP stdio 主循环：从 stdin 读取 JSON-RPC，向 stdout 写入响应。"""
-    loop = asyncio.get_running_loop()
+    """MCP stdio 主循环：从 stdin 读取 JSON-RPC，向 stdout 写入响应。
 
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-
-    writer_transport, writer_protocol = await loop.connect_write_pipe(
-        asyncio.streams.FlowControlMixin, sys.stdout
-    )
-    writer = asyncio.StreamWriter(writer_transport, writer_protocol, reader, loop)
-
-    buffer = b""
+    使用 ``asyncio.to_thread`` 读 stdin，兼容 Windows ProactorEventLoop 和
+    Linux SelectorEventLoop；避免 ``connect_read_pipe`` 在 Windows 上的句柄错误。
+    """
     while True:
-        chunk = await reader.read(65536)
-        if not chunk:
+        # 按行读 stdin（阻塞在线程里，不阻塞事件循环）
+        line_bytes = await asyncio.to_thread(sys.stdin.buffer.readline)
+        if not line_bytes:
             break
-        buffer += chunk
-        while b"\n" in buffer:
-            line, buffer = buffer.split(b"\n", 1)
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        line = line_bytes.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            continue
 
-            request_id = request.get("id")
-            method = request.get("method", "")
-            params = request.get("params", {})
+        request_id = request.get("id")
+        method = request.get("method", "")
+        params = request.get("params", {})
 
-            if method == "initialize":
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "executive-data", "version": "2.0.0"},
-                    },
-                }
-            elif method == "tools/list":
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"tools": list(TOOLS.values())},
-                }
-            elif method == "tools/call":
-                tool_name = params.get("name", "")
-                arguments = params.get("arguments", {})
-                handler = HANDLERS.get(tool_name)
-                if handler:
-                    try:
-                        result = await handler(arguments)
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "result": {
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": json.dumps(result, ensure_ascii=False, default=str),
-                                    }
-                                ]
-                            },
-                        }
-                    except Exception as e:
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": request_id,
-                            "error": {"code": -32000, "message": str(e)},
-                        }
-                else:
+        if method == "initialize":
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "executive-data", "version": "2.0.0"},
+                },
+            }
+        elif method == "tools/list":
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"tools": list(TOOLS.values())},
+            }
+        elif method == "tools/call":
+            tool_name = params.get("name", "")
+            arguments = params.get("arguments", {})
+            handler = HANDLERS.get(tool_name)
+            if handler:
+                try:
+                    result = await handler(arguments)
                     response = {
                         "jsonrpc": "2.0",
                         "id": request_id,
-                        "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(result, ensure_ascii=False, default=str),
+                                }
+                            ]
+                        },
                     }
-            elif method == "notifications/initialized":
-                # 忽略初始化通知
-                continue
+                except Exception as e:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32000, "message": str(e)},
+                    }
             else:
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "error": {"code": -32601, "message": f"Unknown method: {method}"},
+                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"},
                 }
+        elif method == "notifications/initialized":
+            # 忽略初始化通知
+            continue
+        else:
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": f"Unknown method: {method}"},
+            }
 
-            writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode())
-            await writer.drain()
+        # 直接写 stdout（线程安全：单线程事件循环内，无并发写入）
+        sys.stdout.buffer.write(
+            (json.dumps(response, ensure_ascii=False) + "\n").encode()
+        )
+        sys.stdout.buffer.flush()
 
 
 if __name__ == "__main__":

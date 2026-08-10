@@ -15,8 +15,40 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
+
+# 强制 UTF-8 编码，避免 Windows 中文系统下 subprocess 用 gbk 解码子进程输出
+# 失败（UnicodeDecodeError: 'gbk' codec can't decode byte ...）。
+# PYTHONUTF8/PYTHONIOENCODING 会对所有子进程生效（MCP server 等）；
+# reconfigure 则让当前进程的标准流也用 utf-8。
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# Monkey-patch subprocess.Popen：当调用方用 text=True/universal_newlines=True
+# 但未显式指定 encoding 时，自动注入 encoding="utf-8", errors="replace"。
+# 这从根源上消除 Windows 中文系统下 gbk 解码子进程输出导致的崩溃
+# （Python UTF-8 模式需在解释器启动前设置，对当前已运行进程无效，
+#  因此用 monkey-patch 兜底）。
+_OrigPopenInit = subprocess.Popen.__init__
+
+
+def _utf8_popen_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    if (
+        kwargs.get("text") or kwargs.get("universal_newlines")
+    ) and "encoding" not in kwargs:
+        kwargs["encoding"] = "utf-8"
+        kwargs.setdefault("errors", "replace")
+    return _OrigPopenInit(self, *args, **kwargs)
+
+
+subprocess.Popen.__init__ = _utf8_popen_init  # type: ignore[method-assign]
 
 _SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(_SRC_DIR) not in sys.path:
@@ -123,12 +155,14 @@ def _run_api() -> None:
 def _run_worker() -> None:
     import uvicorn
 
+    from worker.app import app as worker_app
+
     settings = get_settings()
     uvicorn.run(
-        _worker_target(),
+        worker_app,
         host=settings.worker_host,
         port=settings.worker_port,
-        reload=settings.api_reload,
+        reload=False,
         log_level=settings.log_level.lower(),
         proxy_headers=True,
         forwarded_allow_ips="*",

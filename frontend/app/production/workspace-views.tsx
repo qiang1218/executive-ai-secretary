@@ -306,9 +306,6 @@ function AssistantMessageBody({
   const toolSteps = message.tool_steps;
   return (
     <>
-      {envelope
-        ? <AssistantOutputRenderer envelope={envelope} onFollowUp={onFollowUp} />
-        : <section className="answer-conclusion"><p>{message.content || "正在等待真实处理结果…"}</p></section>}
       {toolSteps && toolSteps.length > 0 && (
         <details className="tool-steps" open={toolSteps.some((s) => s.status === "running")}>
           <summary className="tool-steps-summary">
@@ -316,16 +313,45 @@ function AssistantMessageBody({
             执行进度（{toolSteps.filter((s) => s.status === "done").length}/{toolSteps.length}）
           </summary>
           <ul className="tool-steps-list">
-            {toolSteps.map((step, i) => (
-              <li key={i} className={`tool-step-item ${step.status}`}>
-                <span className="tool-step-status">{step.status === "done" ? "✓" : "⋯"}</span>
-                <span className="tool-step-name">{step.name}</span>
-                {step.result && <span className="tool-step-result">{step.result.slice(0, 120)}</span>}
-              </li>
-            ))}
+            {toolSteps.map((step, i) => {
+              const isStage = step.kind === "stage";
+              const stageKind = step.stageKind;
+              // 阶段步骤的图标与文案
+              let icon = step.status === "done" ? "✓" : "⋯";
+              let label = step.name;
+              if (isStage) {
+                if (stageKind === "turn_start") icon = step.status === "done" ? "✓" : "▶";
+                else if (stageKind === "turn_end") icon = "■";
+                else if (stageKind === "step") icon = step.status === "done" ? "✓" : "⟳";
+                else if (stageKind === "thinking") icon = step.status === "done" ? "✓" : "💭";
+                else if (stageKind === "interim_assistant") icon = "💬";
+                else if (stageKind === "status") icon = "ℹ";
+                // turn_start 步骤附加耗时
+                if (stageKind === "turn_start" && step.stageData?.duration_seconds != null) {
+                  label = `${label} · ${step.stageData.duration_seconds}s`;
+                }
+                // step 步骤附加 prev_tool_names
+                if (stageKind === "step" && Array.isArray(step.stageData?.prev_tool_names) && (step.stageData?.prev_tool_names as string[]).length > 0) {
+                  label = `${label}（已调用：${(step.stageData!.prev_tool_names as string[]).join("、")}）`;
+                }
+              }
+              return (
+                <li
+                  key={i}
+                  className={`tool-step-item ${step.status} ${isStage ? "stage-step" : ""} ${stageKind ? `stage-${stageKind}` : ""}`}
+                >
+                  <span className="tool-step-status" aria-hidden="true">{icon}</span>
+                  <span className="tool-step-name">{label}</span>
+                  {!isStage && step.result && <span className="tool-step-result">{step.result.slice(0, 120)}</span>}
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}
+      {envelope
+        ? <AssistantOutputRenderer envelope={envelope} onFollowUp={onFollowUp} />
+        : <section className="answer-conclusion"><p>{message.content || "正在等待真实处理结果…"}</p></section>}
       <MessageDetails
         conversationId={conversationId}
         message={message}

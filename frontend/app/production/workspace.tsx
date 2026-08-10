@@ -408,7 +408,27 @@ export function ProductionWorkspace({
 
       // 流式接收响应
       let fullContent = "";
-      const toolSteps: { name: string; status: "running" | "done"; result?: string }[] = [];
+      const toolSteps: import("./types").ToolStep[] = [];
+      // 辅助：把 toolSteps 写回临时 assistant 消息
+      const flushSteps = () => {
+        setMessages((current) => {
+          const idx = current.findIndex((m) => m.id === tempAssistantId);
+          if (idx < 0) return current;
+          const next = [...current];
+          next[idx] = { ...next[idx], tool_steps: [...toolSteps] };
+          return next;
+        });
+      };
+      // 辅助：把一段文本写入临时 assistant 消息（用于 interim_assistant 中间评论）
+      const flushContent = (text: string) => {
+        setMessages((current) => {
+          const idx = current.findIndex((m) => m.id === tempAssistantId);
+          if (idx < 0) return current;
+          const next = [...current];
+          next[idx] = { ...next[idx], content: text, tool_steps: [...toolSteps] };
+          return next;
+        });
+      };
       try {
         for await (const event of productionServices.conversations.sendMessageStream(
           conversationId!,
@@ -418,35 +438,97 @@ export function ProductionWorkspace({
         )) {
           if (event.type === "delta" && event.content) {
             fullContent += event.content;
-            setMessages((current) => {
-              const idx = current.findIndex((m) => m.id === tempAssistantId);
-              if (idx < 0) return current;
-              const next = [...current];
-              next[idx] = { ...next[idx], content: fullContent, tool_steps: [...toolSteps] };
-              return next;
-            });
+            flushContent(fullContent);
           } else if (event.type === "tool_start") {
-            toolSteps.push({ name: event.tool ?? "工具调用", status: "running" });
-            setMessages((current) => {
-              const idx = current.findIndex((m) => m.id === tempAssistantId);
-              if (idx < 0) return current;
-              const next = [...current];
-              next[idx] = { ...next[idx], tool_steps: [...toolSteps] };
-              return next;
-            });
+            toolSteps.push({ name: event.tool ?? "工具调用", status: "running", kind: "tool" });
+            flushSteps();
           } else if (event.type === "tool_complete") {
-            const step = toolSteps.find((s) => s.name === event.tool && s.status === "running");
+            const step = toolSteps.find((s) => s.kind !== "stage" && s.name === event.tool && s.status === "running");
             if (step) {
               step.status = "done";
               step.result = typeof event.result === "string" ? event.result : JSON.stringify(event.result);
             }
-            setMessages((current) => {
-              const idx = current.findIndex((m) => m.id === tempAssistantId);
-              if (idx < 0) return current;
-              const next = [...current];
-              next[idx] = { ...next[idx], tool_steps: [...toolSteps] };
-              return next;
+            flushSteps();
+          } else if (event.type === "turn_start") {
+            // 一轮对话开始：标记开始处理
+            const d = event.data ?? {};
+            toolSteps.push({
+              name: "开始处理",
+              status: "running",
+              kind: "stage",
+              stageKind: "turn_start",
+              stageData: d,
             });
+            flushSteps();
+          } else if (event.type === "step") {
+            // 新的 API 调用迭代：标记上一步完成，追加新阶段步骤
+            for (const s of toolSteps) {
+              if (s.kind === "stage" && s.status === "running" && (s.stageKind === "turn_start" || s.stageKind === "step" || s.stageKind === "thinking" || s.stageKind === "interim_assistant")) {
+                s.status = "done";
+              }
+            }
+            const d = event.data ?? {};
+            const apiCallCount = typeof d.api_call_count === "number" ? d.api_call_count : null;
+            const prevTools = Array.isArray(d.prev_tools) ? d.prev_tools : [];
+            const prevNames = prevTools
+              .map((t: unknown) => (typeof t === "object" && t && "name" in t ? String((t as { name: string }).name) : String(t)))
+              .filter(Boolean);
+            toolSteps.push({
+              name: apiCallCount ? `推理 #${apiCallCount}` : "推理",
+              status: "running",
+              kind: "stage",
+              stageKind: "step",
+              stageData: { ...d, prev_tool_names: prevNames },
+            });
+            flushSteps();
+          } else if (event.type === "thinking") {
+            // 模型思考/等待状态：把当前 running 的阶段步骤名替换为思考文本（更直观）
+            const text = (event.content ?? "").trim();
+            if (!text) continue;
+            const running = toolSteps.find((s) => s.kind === "stage" && s.status === "running");
+            if (running) {
+              running.stageKind = "thinking";
+              running.name = text;
+            } else {
+              toolSteps.push({ name: text, status: "running", kind: "stage", stageKind: "thinking" });
+            }
+            flushSteps();
+          } else if (event.type === "interim_assistant") {
+            // 中间助理评论：直接显示在内容区（不覆盖 fullContent，作为临时评论）
+            const text = (event.content ?? "").trim();
+            if (text) {
+              flushContent(text);
+            }
+          } else if (event.type === "status") {
+            // 生命周期/警告消息：作为阶段步骤追加
+            const d = event.data ?? {};
+            const kind = typeof d.kind === "string" ? d.kind : "info";
+            const msg = (event.content ?? "").trim();
+            if (msg) {
+              toolSteps.push({
+                name: msg,
+                status: "done",
+                kind: "stage",
+                stageKind: "status",
+                stageData: { kind },
+              });
+              flushSteps();
+            }
+          } else if (event.type === "turn_end") {
+            // 一轮对话结束：标记所有 running 阶段步骤完成
+            const d = event.data ?? {};
+            for (const s of toolSteps) {
+              if (s.status === "running") s.status = "done";
+            }
+            // 如果有 duration_seconds，附加到 turn_start 步骤
+            const dur = typeof d.duration_seconds === "number" ? d.duration_seconds : null;
+            if (dur !== null) {
+              const ts = toolSteps.find((s) => s.stageKind === "turn_start");
+              if (ts) ts.stageData = { ...(ts.stageData ?? {}), duration_seconds: dur };
+            }
+            // 恢复显示真实内容（防止 interim_assistant 文本残留）
+            if (fullContent) flushContent(fullContent);
+            flushSteps();
           } else if (event.type === "done") {
             // 用真实 message 替换占位
             const realContent = event.content ?? fullContent;

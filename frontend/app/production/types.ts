@@ -179,6 +179,16 @@ export type ToolStep = {
   name: string;
   status: "running" | "done";
   result?: string;
+  /**
+   * 步骤类型：
+   * - ``tool``: 工具调用（默认，向后兼容）
+   * - ``stage``: 阶段事件（turn_start / step / thinking / interim_assistant / status / turn_end）
+   */
+  kind?: "tool" | "stage";
+  /** 阶段事件的子类型（仅 kind=stage 时有意义） */
+  stageKind?: "turn_start" | "turn_end" | "step" | "thinking" | "interim_assistant" | "status";
+  /** 阶段事件的附加数据（如 step 的 api_call_count、turn_end 的 duration_seconds） */
+  stageData?: Record<string, unknown>;
 };
 
 export type ConversationMessage = {

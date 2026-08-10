@@ -196,7 +196,7 @@ export function createProductionServices(client: ApiClient = apiClient) {
       content: string,
       organizationScope: OrganizationScope,
       modelId: string,
-    ): AsyncGenerator<{ type: string; content?: string; message_id?: string; error?: string; tool?: string; args?: unknown; result?: unknown }> {
+    ): AsyncGenerator<{ type: string; content?: string; message_id?: string; error?: string; tool?: string; args?: unknown; result?: unknown; data?: Record<string, unknown> }> {
       for await (const data of client.requestStream(
         `/conversations/${encodeURIComponent(id)}/messages`,
         {

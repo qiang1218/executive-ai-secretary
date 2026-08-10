@@ -29,14 +29,20 @@ class HermesClientError(RuntimeError):
 
 @dataclass
 class HermesStreamEvent:
-    """Worker SSE 事件。"""
+    """Worker SSE 事件。
 
-    type: str  # "delta" | "tool_start" | "tool_complete" | "done" | "error"
+    基础事件：delta / tool_start / tool_complete / done / error
+    阶段事件：turn_start / turn_end / step / thinking / interim_assistant / status
+    阶段事件的附加数据放在 ``data`` 字段中。
+    """
+
+    type: str
     content: str = ""
     tool: str | None = None
     args: dict | None = None
     result: object | None = None
     error: str | None = None
+    data: dict | None = None
 
 
 class HermesClient:
@@ -60,6 +66,7 @@ class HermesClient:
         base_url: str,
         api_key: str,
         model: str,
+        enterprise_id: str,
         provider: str = "openai",
         api_mode: str = "chat_completions",
         system_prompt: str | None = None,
@@ -73,6 +80,9 @@ class HermesClient:
 
         所有 LLM 配置（base_url / api_key / provider / api_mode / model）均由
         调用方从数据库配置中读取并传入，worker 不做全局配置。
+
+        ``enterprise_id`` 会透传给 worker，用于注入 MCP server 子进程 env，
+        实现多企业数据隔离。
         """
         payload: dict = {
             "base_url": base_url,
@@ -82,6 +92,7 @@ class HermesClient:
             "model": model,
             "messages": messages,
             "conversation_id": conversation_id,
+            "enterprise_id": enterprise_id,
             "max_iterations": max_iterations or self._settings.hermes_max_iterations,
             "stream": True,
         }
@@ -124,6 +135,7 @@ class HermesClient:
                         args=data.get("args"),
                         result=data.get("result"),
                         error=data.get("error"),
+                        data=data.get("data"),
                     )
 
     async def health_check(self) -> bool:

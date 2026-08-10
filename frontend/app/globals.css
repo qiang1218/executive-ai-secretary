@@ -9700,14 +9700,20 @@ html[data-theme="dark"] .production-admin-shell {
 }
 
 .mcp-candidate-section article > button strong {
+  overflow: hidden;
   font-size: 10.5px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mcp-candidate-section article > button small {
+  overflow: hidden;
   font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 8px;
   color: var(--theme-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mcp-candidate-section article > button em {
@@ -9731,32 +9737,35 @@ html[data-theme="dark"] .production-admin-shell {
 .mcp-tool-detail { min-width: 0; }
 .mcp-tool-detail > form { display: flex; min-height: 100%; flex-direction: column; }
 .mcp-tool-detail form > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 22px 24px 18px; border-bottom: 1px solid var(--theme-line); }
-.mcp-tool-detail form > header > div { display: grid; gap: 3px; }
+.mcp-tool-detail form > header > div { display: grid; min-width: 0; gap: 3px; }
 .mcp-tool-detail form > header small { color: var(--theme-accent-strong); font-size: 8px; font-weight: 650; letter-spacing: .06em; }
-.mcp-tool-detail form > header h2 { margin: 0; font-size: 19px; font-weight: 560; letter-spacing: -.02em; }
-.mcp-tool-detail form > header code { color: var(--theme-muted); font-size: 8px; }
-.mcp-detail-status { padding: 5px 8px; border: 1px solid var(--theme-line); border-radius: 999px; color: var(--theme-muted); font-size: 8.5px; }
+.mcp-tool-detail form > header h2 { overflow: hidden; margin: 0; font-size: 19px; font-weight: 560; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-tool-detail form > header code { overflow: hidden; display: block; max-width: 100%; color: var(--theme-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-tool-detail form > header > span { flex: 0 0 auto; }
+.mcp-detail-status { padding: 5px 8px; border: 1px solid var(--theme-line); border-radius: 999px; color: var(--theme-muted); font-size: 8.5px; white-space: nowrap; }
 .mcp-detail-status.ready { color: var(--theme-positive); }
 .mcp-detail-status.data_unavailable { color: var(--theme-attention); }
 
 .mcp-tool-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; border-bottom: 1px solid var(--theme-line); background: var(--theme-line); }
 .mcp-tool-controls > label { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 14px 18px; background: var(--theme-soft); }
 .mcp-tool-controls > label > span:first-child { font-size: 9.5px; font-weight: 610; }
-.mcp-tool-controls > label > small { grid-column: 1 / -1; color: var(--theme-muted); font-size: 8px; line-height: 1.45; }
+.mcp-tool-controls > label > small { grid-column: 1 / -1; overflow: hidden; color: var(--theme-muted); font-size: 8px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 
 .mcp-tool-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 21px 24px 10px; }
-.mcp-tool-form label { display: grid; gap: 6px; }
+.mcp-tool-form label { display: grid; gap: 6px; min-width: 0; }
 .mcp-tool-form label.wide { grid-column: 1 / -1; }
 .mcp-tool-form label > span { font-size: 9px; font-weight: 600; }
-.mcp-tool-form input { height: 38px; padding: 0 10px; border-radius: 8px; font-size: 10px; }
-.mcp-tool-form textarea { resize: vertical; padding: 9px 10px; border-radius: 8px; font-size: 10px; line-height: 1.55; }
+.mcp-tool-form input { height: 38px; min-width: 0; padding: 0 10px; border-radius: 8px; font-size: 10px; }
+.mcp-tool-form textarea { resize: vertical; max-height: 220px; padding: 9px 10px; border-radius: 8px; font-size: 10px; line-height: 1.55; }
 
 .mcp-schema { margin: 12px 24px 0; padding: 14px 0; border-top: 1px solid var(--theme-line); border-bottom: 1px solid var(--theme-line); }
 .mcp-schema > header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .mcp-schema > header strong { font-size: 9.5px; font-weight: 620; }
 .mcp-schema > header small { color: var(--theme-muted); font-size: 8px; }
 .mcp-schema > div { display: flex; flex-wrap: wrap; gap: 7px; }
-.mcp-schema > div > span { display: grid; gap: 2px; padding: 7px 9px; border: 1px solid var(--theme-line); border-radius: 7px; background: var(--theme-soft); }
+.mcp-schema > div > span { display: grid; min-width: 0; max-width: 100%; flex: 0 1 220px; gap: 2px; padding: 7px 9px; border: 1px solid var(--theme-line); border-radius: 7px; background: var(--theme-soft); }
+.mcp-schema > div > span code { overflow: hidden; max-width: 100%; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-schema > div > span small { overflow: hidden; max-width: 100%; word-break: break-word; text-overflow: ellipsis; }
 .mcp-schema code { font-size: 8px; }
 .mcp-schema span small,
 .mcp-schema p { margin: 0; color: var(--theme-muted); font-size: 7.5px; }
@@ -9772,8 +9781,8 @@ html[data-theme="dark"] .production-admin-shell {
 .mcp-tool-detail .anspire-error,
 .mcp-tool-detail .anspire-notice { margin-left: 24px; margin-right: 24px; }
 .mcp-tool-detail form > footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: auto; padding: 17px 24px; border-top: 1px solid var(--theme-line); background: var(--theme-soft); }
-.mcp-tool-detail form > footer > span { color: var(--theme-muted); font-size: 8px; }
-.mcp-tool-detail form > footer > div { display: flex; gap: 8px; }
+.mcp-tool-detail form > footer > span { overflow: hidden; min-width: 0; color: var(--theme-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-tool-detail form > footer > div { display: flex; flex: 0 0 auto; gap: 8px; }
 .mcp-tool-detail form > footer button { min-height: 34px; padding: 0 12px; border-radius: 8px; font-size: 9px; }
 
 .mcp-create-backdrop {
@@ -11236,6 +11245,120 @@ html[data-theme="dark"] .production-admin-shell {
 
 @keyframes production-skeleton {
   from { opacity: .55; }
+  to { opacity: 1; }
+}
+
+/* ── 执行进度（tool-steps）—— 工具步骤 + 阶段步骤 ── */
+.tool-steps {
+  margin-top: 12px;
+  border: 1px solid var(--theme-line);
+  border-radius: 9px;
+  background: var(--theme-soft);
+  font-size: 11px;
+  color: var(--theme-muted);
+}
+
+.tool-steps[open] { background: var(--theme-surface); }
+
+.tool-steps-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.tool-steps-summary::-webkit-details-marker { display: none; }
+
+.tool-steps-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.tool-steps-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.tool-step-item {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  line-height: 1.45;
+}
+
+.tool-step-item.running { background: var(--theme-soft); }
+
+.tool-step-item.done { color: var(--theme-faint); }
+
+.tool-step-status {
+  display: inline-flex;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--theme-muted);
+}
+
+.tool-step-item.running .tool-step-status { color: var(--theme-attention); }
+.tool-step-item.done .tool-step-status { color: var(--theme-faint); }
+
+.tool-step-name {
+  word-break: break-word;
+}
+
+.tool-step-result {
+  display: block;
+  margin-top: 2px;
+  padding-left: 26px;
+  font-size: 10px;
+  color: var(--theme-faint);
+  grid-column: 1 / -1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 阶段步骤（stage-step）—— 区别于工具步骤 */
+.tool-step-item.stage-step {
+  font-style: italic;
+  color: var(--theme-muted);
+}
+
+.tool-step-item.stage-step.running {
+  background: var(--theme-attention-soft);
+  color: var(--theme-attention);
+}
+
+.tool-step-item.stage-step.done {
+  color: var(--theme-faint);
+  font-style: normal;
+}
+
+/* 不同阶段子类型的强调色 */
+.tool-step-item.stage-turn_start .tool-step-status,
+.tool-step-item.stage-turn_end .tool-step-status { color: var(--theme-ink); }
+.tool-step-item.stage-step .tool-step-status,
+.tool-step-item.stage-thinking .tool-step-status { color: var(--theme-accent, var(--theme-attention)); }
+.tool-step-item.stage-status .tool-step-status { color: var(--theme-faint); }
+
+/* running 状态的轻微脉动 */
+.tool-step-item.running .tool-step-status {
+  animation: tool-step-pulse 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes tool-step-pulse {
+  from { opacity: .6; }
   to { opacity: 1; }
 }
 

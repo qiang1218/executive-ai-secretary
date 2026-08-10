@@ -746,6 +746,9 @@ class ConversationService:
         # 从数据库读取企业 LLM 配置（解密 api_key）
         from services.anspire import decrypt_anspire_api_key
 
+        active_harness = await get_active_harness_payload(
+            self._session, principal.enterprise_id
+        )
         provider_config = await model_config_repo.find_active(
             self._session, principal.enterprise_id
         )

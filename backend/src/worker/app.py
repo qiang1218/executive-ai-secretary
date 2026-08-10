@@ -60,6 +60,7 @@ class ChatRequest(BaseModel):
     model: str = Field(default="qwen3.5-plus")
     messages: list[Message]
     conversation_id: str
+    enterprise_id: str = Field(description="企业 ID，用于 MCP 多企业数据隔离")
 
     # 可选
     max_iterations: int = Field(default=10)
@@ -137,6 +138,7 @@ async def chat_completions(
                 message=user_msg.content,
                 base_url=req.base_url,
                 api_key=req.api_key,
+                enterprise_id=req.enterprise_id,
                 provider=req.provider,
                 api_mode=req.api_mode,
                 model=req.model,
@@ -159,6 +161,8 @@ async def chat_completions(
                     data["result"] = event.result
                 if event.error:
                     data["error"] = event.error
+                if event.data is not None:
+                    data["data"] = event.data
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
         except Exception as e:  # noqa: BLE001
             logger.exception("worker_stream_failed")

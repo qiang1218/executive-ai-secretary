@@ -226,6 +226,7 @@ async def create_message(
                 provider=llm_config.get("provider", "openai"),
                 api_mode=llm_config.get("api_mode", "chat_completions"),
                 model=llm_config["model"],
+                enterprise_id=str(principal.enterprise_id),
                 system_prompt=system_prompt,
             ):
                 if event.type == "delta":
@@ -285,6 +286,25 @@ async def create_message(
                             },
                             ensure_ascii=False,
                         )
+                        + "\n\n"
+                    )
+                elif event.type in (
+                    "turn_start",
+                    "turn_end",
+                    "step",
+                    "thinking",
+                    "interim_assistant",
+                    "status",
+                ):
+                    # 阶段事件：直接透传 type / content / data 给前端
+                    payload: dict[str, Any] = {"type": event.type}
+                    if event.content:
+                        payload["content"] = event.content
+                    if event.data is not None:
+                        payload["data"] = event.data
+                    yield (
+                        "data: "
+                        + json.dumps(payload, ensure_ascii=False)
                         + "\n\n"
                     )
                 elif event.type == "done":
