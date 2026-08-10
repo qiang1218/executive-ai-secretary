@@ -579,11 +579,26 @@ export async function loadProductionBootstrap(
     };
   }
 
-  const [organizationsResult, conversationsResult, projectsResult] = await Promise.all([
+  // 仅 ``auth.me()`` throw → 表示真会话过期,前端会跳登录页。其它 endpoint
+  // 任一失败都降级为空 + optionalErrors,不抛。避免后端数据源偶发 401
+  // (连接 race / 限流) 让用户被强行登出。
+  const coreResults = await Promise.allSettled([
     services.organizations.listAnalyzable(),
     services.conversations.list(undefined, { placement: "all" }),
     services.projects.list(),
   ]);
+  const optionalErrors: ProductionBootstrap["optionalErrors"] = {};
+  const organizations =
+    coreResults[0].status === "fulfilled" ? coreResults[0].value.items : [];
+  const conversations =
+    coreResults[1].status === "fulfilled" ? coreResults[1].value.items : [];
+  const projects = coreResults[2].status === "fulfilled" ? coreResults[2].value.items : [];
+  const coreKeys = ["organizationUnits", "conversations", "projects"] as const;
+  coreResults.forEach((result, index) => {
+    if (result.status === "rejected") {
+      optionalErrors[coreKeys[index]] = humanizeApiError(result.reason);
+    }
+  });
 
   const optional = await Promise.allSettled([
     services.memories.list(),
@@ -594,7 +609,6 @@ export async function loadProductionBootstrap(
     services.auth.personalProfile(),
     services.models.list(),
   ] as const);
-  const optionalErrors: ProductionBootstrap["optionalErrors"] = {};
   const authorizedOrganizationIds = new Set(me.scopes.map((scope) => scope.id));
   const optionalKeys = ["memories", "reports", "jobs", "dataCapabilities", "dailyBrief", "personalProfile", "authorizedModels"] as const;
   optional.forEach((result, index) => {
@@ -605,11 +619,11 @@ export async function loadProductionBootstrap(
 
   return {
     me,
-    organizationUnits: organizationsResult.items.filter(
+    organizationUnits: organizations.filter(
       (unit) => authorizedOrganizationIds.has(unit.id) && unit.enabled_for_analysis && unit.data_connected,
     ),
-    conversations: conversationsResult.items,
-    projects: projectsResult.items,
+    conversations,
+    projects,
     authorizedModels: optional[6].status === "fulfilled" ? optional[6].value : [],
     memories: optional[0].status === "fulfilled" ? optional[0].value.items : [],
     reports: optional[1].status === "fulfilled" ? optional[1].value.items : [],

@@ -687,7 +687,11 @@ export type ProductionBootstrap = {
   dataCapabilities: DataCapabilities | null;
   dailyBrief: DailyBrief | null;
   personalProfile: ExecutivePersonalProfile | null;
-  optionalErrors: Partial<Record<"memories" | "reports" | "jobs" | "dataCapabilities" | "dailyBrief" | "personalProfile" | "authorizedModels", string>>;
+  optionalErrors: Partial<Record<
+    "organizationUnits" | "conversations" | "projects"
+    | "memories" | "reports" | "jobs" | "dataCapabilities" | "dailyBrief" | "personalProfile" | "authorizedModels",
+    string
+  >>;
 };
 
 export type ApiErrorPayload = {
