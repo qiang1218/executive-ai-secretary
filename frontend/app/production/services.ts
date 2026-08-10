@@ -41,6 +41,10 @@ import type {
   Report,
   ScheduledTask,
   ManualRun,
+  Skill,
+  SkillListOut,
+  SkillCreate,
+  SkillUpdate,
 } from "./types";
 
 function buildFilesListUrl(params: { organizationId?: string; limit?: number; cursor?: string }): string {
@@ -534,7 +538,32 @@ export function createProductionServices(client: ApiClient = apiClient) {
     },
   };
 
-  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcpSchema, adminData };
+  // ───────────────────────────────────────────────────────
+  const adminSkills = {
+    async list() {
+      return client.request<SkillListOut>("/admin/skills");
+    },
+    async get(skillId: string) {
+      return client.request<Skill>(`/admin/skills/${encodeURIComponent(skillId)}`);
+    },
+    async create(payload: SkillCreate) {
+      return client.request<Skill>("/admin/skills", { method: "POST", body: payload });
+    },
+    async update(skillId: string, payload: SkillUpdate) {
+      return client.request<Skill>(`/admin/skills/${encodeURIComponent(skillId)}`, {
+        method: "PUT",
+        body: payload,
+      });
+    },
+    async remove(skillId: string) {
+      return client.request<{ deleted: boolean }>(
+        `/admin/skills/${encodeURIComponent(skillId)}`,
+        { method: "DELETE" },
+      );
+    },
+  };
+
+  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcpSchema, adminData, adminSkills };
 }
 
 export type ProductionServices = ReturnType<typeof createProductionServices>;

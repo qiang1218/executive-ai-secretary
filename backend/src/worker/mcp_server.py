@@ -193,10 +193,11 @@ async def handle_execute_query(params: dict) -> dict:
         if name not in allowed_names:
             return {"error": f"Table '{name}' is not in the allowed list"}
 
-    # 5. 执行
+    # 5. 执行（ODS 表在 executive_source_v3 schema，设置 search_path）
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
+            await conn.execute("SET search_path TO executive_source_v3, public")
             rows = await conn.fetch(sql, timeout=10)
     except asyncpg.exceptions.QueryCanceledError:
         return {"error": "Query timed out (10s limit)"}

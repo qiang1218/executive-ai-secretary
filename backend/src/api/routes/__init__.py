@@ -16,6 +16,7 @@ _ROUTE_MODULES = (
     "admin_harness",
     "admin_mcp_schema",
     "admin_models",
+    "admin_skills",
     "auth",
     "conversations",
     "data",

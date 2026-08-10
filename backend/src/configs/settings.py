@@ -109,6 +109,14 @@ class Settings(BaseSettings):
     )
     max_upload_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 
+    # 启用的 skill 文件释放目录（API 与 worker 共享同一文件系统路径）
+    # 该目录即 HERMES_HOME，skill 文件释放到 <HERMES_HOME>/skills/<slug>/
+    # 优先读 HERMES_HOME 环境变量（与 hermes-agent 对齐），其次 SKILLS_ACTIVE_DIR
+    skills_active_dir: Path = Field(
+        default=Path("./runtime/skills_active"),
+        validation_alias=AliasChoices("HERMES_HOME", "SKILLS_ACTIVE_DIR"),
+    )
+
     session_cookie_name: str = "exec_session"
     csrf_cookie_name: str = "exec_csrf"
     session_cookie_secure: bool = Field(

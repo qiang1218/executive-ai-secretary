@@ -137,6 +137,7 @@ class AgentRunner:
         enabled_toolsets: list[str] | None = None,
         disabled_toolsets: list[str] | None = None,
         mcp_servers: list[dict] | None = None,
+        skills: list[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """异步流式聊天。
 
@@ -150,6 +151,19 @@ class AgentRunner:
         # 按企业注册 MCP server（企业切换时自动 shutdown 旧连接）
         if enterprise_id:
             await _ensure_mcp_registered(enterprise_id)
+
+        # HERMES_HOME 优先从 .env 环境变量读取（进程启动时已加载）；
+        # 若未配置则回退到 settings.skills_active_dir 并动态设置。
+        # hermes-agent 从 <HERMES_HOME>/skills/<slug>/ 加载 skill 文件。
+        if not os.environ.get("HERMES_HOME"):
+            hermes_home = get_settings().skills_active_dir
+            if hermes_home:
+                os.environ["HERMES_HOME"] = str(hermes_home)
+
+        # skills 参数仅用于日志记录；实际加载由 hermes-agent 扫描
+        # <HERMES_HOME>/skills/ 目录完成（API 侧只释放已启用的 skill）
+        if skills:
+            logger.info("chat_with_skills conversation=%s skills=%s", conversation_id, skills)
 
         hermes_session_id = session_store.get_or_create(conversation_id)
 

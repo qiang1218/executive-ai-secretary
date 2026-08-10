@@ -18,6 +18,7 @@ from .job import *  # noqa: F401,F403
 from .config import *  # noqa: F401,F403
 from .data_source import *  # noqa: F401,F403
 from .data_warehouse import *  # noqa: F401,F403
+from .skill import *  # noqa: F401,F403
 
 # 显式列出主要符号，便于 IDE 自动补全
 __all__ = [
@@ -75,4 +76,5 @@ __all__ = [
     "FactFinanceCollection",
     "FactTarget",
     "DailySnapshot",
+    "Skill",
 ]

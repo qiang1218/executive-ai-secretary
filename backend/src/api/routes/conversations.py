@@ -12,6 +12,7 @@ from api.deps import (
     ConversationServiceDep,
     ExecutivePrincipalDep,
     HermesClientDep,
+    SkillServiceDep,
 )
 from schemas import (
     ClarificationOut,
@@ -198,6 +199,7 @@ async def create_message(
     principal: ExecutivePrincipalDep,
     service: ConversationServiceDep,
     hermes_client: HermesClientDep,
+    skill_service: SkillServiceDep,
 ) -> StreamingResponse:
     # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置 + harness prompt
     user_msg, context_messages, conv, llm_config, harness_prompt = await service.prepare_message(
@@ -209,6 +211,9 @@ async def create_message(
     messages_for_worker = [
         {"role": m.role, "content": m.content} for m in context_messages
     ]
+
+    # 查询已启用的 skill slugs，注入 worker 供 hermes-agent 加载
+    enabled_skill_slugs = await skill_service.list_enabled_slugs()
 
 
     # 3. 返回 SSE 流
@@ -228,6 +233,7 @@ async def create_message(
                 model=llm_config["model"],
                 enterprise_id=str(principal.enterprise_id),
                 system_prompt=system_prompt,
+                skills=enabled_skill_slugs,
             ):
                 if event.type == "delta":
                     full_content.append(event.content)

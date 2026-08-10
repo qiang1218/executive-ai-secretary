@@ -36,6 +36,7 @@ from services.hermes_client import HermesClient
 from services.organization_service import OrganizationService
 from services.project_service import ProjectService
 from services.report_service import ReportService
+from services.skill_service import SkillService
 from configs.settings import Settings, get_settings
 from db.session import get_db_async
 
@@ -235,6 +236,16 @@ async def get_hermes_client(settings: SettingsDep) -> HermesClient:
 HermesClientDep = Annotated[HermesClient, Depends(get_hermes_client)]
 
 
+async def get_skill_service(
+    session: AsyncSessionDep, settings: SettingsDep
+) -> SkillService:
+    """FastAPI dependency: instantiate ``SkillService``."""
+    return SkillService(session, settings)
+
+
+SkillServiceDep = Annotated[SkillService, Depends(get_skill_service)]
+
+
 __all__ = [
     "AsyncSessionDep",
     "SettingsDep",
@@ -259,6 +270,7 @@ __all__ = [
     "HarnessAdminServiceDep",
     "HealthServiceDep",
     "HermesClientDep",
+    "SkillServiceDep",
     "AuditService",
     "AuthService",
     "DailyBriefService",
@@ -277,6 +289,7 @@ __all__ = [
     "HarnessAdminService",
     "HealthService",
     "HermesClient",
+    "SkillService",
     "Principal",
     "get_current_principal",
     "get_executive_principal",
@@ -299,6 +312,7 @@ __all__ = [
     "get_harness_admin_service",
     "get_health_service",
     "get_hermes_client",
+    "get_skill_service",
     "get_db_async",
     "get_settings",
     "Settings",

@@ -35,60 +35,27 @@ logger = logging.getLogger(__name__)
 
 BUILTIN_TABLES: list[dict] = [
     {
-        "table_name": "fact_opportunity",
-        "display_name": "商机事实表",
-        "description": "商机核心数据：编号、阶段、金额、预计关闭日期、赢率等",
+        "table_name": "ods_opportunity",
+        "display_name": "商机 ODS 表",
+        "description": "商机数据：编号、客户、销售负责人、预期/签约金额、阶段、行业等",
         "category": "opportunity",
     },
     {
-        "table_name": "fact_opportunity_participant",
-        "display_name": "商机参与人表",
-        "description": "商机的参与人员及角色（销售、售前、交付等）",
-        "category": "opportunity",
-    },
-    {
-        "table_name": "fact_opportunity_product",
-        "display_name": "商机产品表",
-        "description": "商机关联的产品/服务清单",
-        "category": "opportunity",
-    },
-    {
-        "table_name": "fact_delivery",
-        "display_name": "交付事实表",
-        "description": "项目交付数据：状态、进度、风险、金额、里程碑等",
+        "table_name": "ods_delivery",
+        "display_name": "交付 ODS 表",
+        "description": "项目交付数据：项目编码、项目经理、合同金额、确认收入、完成率、延期天数等",
         "category": "delivery",
     },
     {
-        "table_name": "fact_finance_collection",
-        "display_name": "回款事实表",
-        "description": "回款与财务数据：应收/已收/未收金额、逾期天数、账龄等",
+        "table_name": "ods_collection",
+        "display_name": "回款 ODS 表",
+        "description": "回款数据：应收/已收/未收金额、逾期天数、账龄、发票状态等",
         "category": "collection",
     },
-    {
-        "table_name": "fact_target",
-        "display_name": "目标事实表",
-        "description": "经营目标数据：指标代码、目标值、周期等",
-        "category": "target",
-    },
-    {
-        "table_name": "dim_customer",
-        "display_name": "客户维度表",
-        "description": "客户主数据：名称、行业、区域、价值等级等",
-        "category": "dimension",
-    },
-    {
-        "table_name": "dim_person",
-        "display_name": "人员维度表",
-        "description": "人员主数据：姓名、角色、活跃状态等",
-        "category": "dimension",
-    },
-    {
-        "table_name": "daily_snapshot",
-        "display_name": "日快照表",
-        "description": "每日经营快照数据：指标 JSON、异常检测结果",
-        "category": "snapshot",
-    },
 ]
+
+# ODS 物理表位于 executive_source_v3 schema，查询前需设置 search_path
+ODS_SCHEMA = "executive_source_v3"
 
 
 class McpSchemaService:
@@ -392,8 +359,9 @@ async def _discover_columns(session: AsyncSession, table_name: str) -> list[dict
     "Inspection on an AsyncEngine is currently not supported"。
     """
     def _do_discover(sync_conn) -> list[dict]:
-        from sqlalchemy import inspect
-        # AsyncConnection.run_sync 传入的是 sync Connection，可直接 inspect
+        from sqlalchemy import inspect, text
+        # ODS 表在 executive_source_v3 schema，设置 search_path 让 inspect 能找到
+        sync_conn.execute(text(f"SET search_path TO {ODS_SCHEMA}, public"))
         insp = inspect(sync_conn)
         columns = insp.get_columns(table_name)
         pk = insp.get_pk_constraint(table_name)
@@ -431,6 +399,8 @@ async def _fetch_sample_rows(
     """获取表的示例数据行。"""
     from sqlalchemy import text as sa_text
     try:
+        # ODS 表在 executive_source_v3 schema，设置 search_path
+        await session.execute(sa_text(f"SET search_path TO {ODS_SCHEMA}, public"))
         result = await session.execute(
             sa_text(f"SELECT * FROM {table_name} LIMIT :limit"),
             {"limit": limit},

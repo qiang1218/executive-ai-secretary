@@ -112,6 +112,7 @@ class HermesClient:
         enabled_toolsets: list[str] | None = None,
         disabled_toolsets: list[str] | None = None,
         mcp_servers: list[dict] | None = None,
+        skills: list[str] | None = None,
     ) -> AsyncIterator[HermesStreamEvent]:
         """流式调用 worker /v1/chat/completions。
 
@@ -120,6 +121,9 @@ class HermesClient:
 
         ``enterprise_id`` 会透传给 worker，用于注入 MCP server 子进程 env，
         实现多企业数据隔离。
+
+        ``skills`` 为已启用的 skill slug 列表，worker 侧 hermes-agent 从
+        ``HERMES_HOME/skills/<slug>/SKILL.md`` 自动加载。
         """
         payload: dict = {
             "base_url": base_url,
@@ -143,6 +147,8 @@ class HermesClient:
             payload["disabled_toolsets"] = disabled_toolsets
         if mcp_servers:
             payload["mcp_servers"] = mcp_servers
+        if skills:
+            payload["skills"] = skills
 
         headers = {}
         if self._settings.hermes_api_key:

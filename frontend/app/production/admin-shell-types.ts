@@ -1,6 +1,6 @@
 import type { HarnessBusinessConfig } from "./types";
 
-export type AdminView = "models" | "harness" | "mcp_schema" | "data";
+export type AdminView = "models" | "harness" | "mcp_schema" | "data" | "skills";
 
 export type DataOperationsView = "sources" | "runs" | "schedule" | "quality" | "policy";
 
@@ -32,6 +32,12 @@ export const guideContent: Record<AdminView, { eyebrow: string; title: string; s
     title: "经营数据按完整批次生效",
     summary: "商机、项目与回款必须同时通过字段、关联和金额校验；失败会继续使用上一完整成功批次。",
     principles: ["连接测试只验证只读与结构契约", "可以先校验且不生效", "正式同步只切换完整成功批次"],
+  },
+  skills: {
+    eyebrow: "技能说明",
+    title: "企业级技能，所有会话共享",
+    summary: "技能（Skill）按企业配置，启用后对所有会话生效；停用后立即从共享目录清除。",
+    principles: ["启用时文件释放到共享目录供 Worker 加载", "停用时自动清理磁盘文件", "修改文件后需重新启用才会生效"],
   },
 };
 

@@ -16,7 +16,7 @@ down_revision: Union[str, None] = "b7f3c9a2e611"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-DOMESTIC_GATEWAY = "https://open-gateway.anspire.cn/v6"
+DOMESTIC_GATEWAY = "https://open-gateway.anspire.ai/v6"
 GLOBAL_GATEWAY = "https://open-gateway.anspire.ai/v6"
 
 

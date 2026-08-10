@@ -22,6 +22,7 @@ from .organization import *  # noqa: F401,F403
 from .project import *  # noqa: F401,F403
 from .report import *  # noqa: F401,F403
 from .runtime import *  # noqa: F401,F403
+from .skill import *  # noqa: F401,F403
 from .user import *  # noqa: F401,F403
 
 __all__ = [
@@ -112,6 +113,11 @@ __all__ = [
     "UserCreate",
     "UserUpdate",
     "TemporaryPasswordRequest",
+    "SkillCreate",
+    "SkillUpdate",
+    "SkillOut",
+    "SkillListItem",
+    "SkillListOut",
 ]
 
 

@@ -60,6 +60,17 @@ def _build_lifespan() -> object:
             # scheduler 启动失败不应拖死 API；记录并继续。
             logger.exception("job_runner_startup_failed")
 
+        # 启动期同步 enabled skills 到共享目录，避免 DB/磁盘不一致
+        try:
+            from db.session import AsyncSessionLocal
+            from services.skill_service import SkillService
+
+            async with AsyncSessionLocal() as session:
+                skill_svc = SkillService(session, settings)
+                await skill_svc.sync_active_skills_to_disk()
+        except Exception:  # noqa: BLE001
+            logger.exception("skill_sync_startup_failed")
+
         try:
             yield
         finally:

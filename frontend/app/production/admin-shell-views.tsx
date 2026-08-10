@@ -14,6 +14,11 @@ import type {
   McpSchemaUpdate,
   McpSchemaRefreshOut,
   ModelProviderConfig,
+  Skill,
+  SkillCreate,
+  SkillListItem,
+  SkillListOut,
+  SkillUpdate,
 } from "./types";
 import type { AdminView } from "./admin-shell-types";
 import { guideContent } from "./admin-shell-types";
@@ -593,7 +598,9 @@ export function McpSchemaPanel() {
           {!selected ? (
             <div className="anspire-loading">请选择一张数据表查看详情。</div>
           ) : (
-            <>
+            <form onSubmit={(e) => e.preventDefault()}>
+              <div className="accent-strip" aria-hidden="true" />
+
               <header>
                 <div>
                   <small>
@@ -603,23 +610,48 @@ export function McpSchemaPanel() {
                   <h2>{selected.display_name}</h2>
                   <code>{selected.table_name}</code>
                 </div>
-                <span
-                  className={`mcp-detail-status ${selected.is_enabled ? "ready" : "disabled"}`}
-                >
+                <span className={`mcp-detail-status ${selected.is_enabled ? "ready" : "disabled"}`}>
+                  <i aria-hidden="true" />
                   {selected.is_enabled ? "已启用" : "已停用"}
                 </span>
               </header>
 
+              <div className="mcp-detail-meta">
+                <span className="mcp-detail-meta-chip">
+                  <em>列</em>
+                  <strong>{selected.column_schema.length}</strong>
+                </span>
+                <span className="mcp-detail-meta-chip">
+                  <em>限行</em>
+                  <strong>{selected.max_rows}</strong>
+                </span>
+                <span className="mcp-detail-meta-chip">
+                  <em>超时</em>
+                  <strong>{selected.query_timeout_seconds}s</strong>
+                </span>
+                {selected.sample_rows && selected.sample_rows.length > 0 && (
+                  <span className="mcp-detail-meta-chip">
+                    <em>示例</em>
+                    <strong>{selected.sample_rows.length} 行</strong>
+                  </span>
+                )}
+              </div>
+
               <div className="mcp-tool-controls">
-                <label>
+                <label className="mcp-switch-card">
                   <span>Agent 可见</span>
+                  <span className={`mcp-switch-card-state ${selected.is_enabled ? "on" : ""}`}>
+                    {selected.is_enabled ? "ON" : "OFF"}
+                  </span>
                   <span className="switch">
                     <input
                       type="checkbox"
                       checked={selected.is_enabled}
                       disabled={Boolean(busy)}
                       onChange={(e) =>
-                        void updateTable(selected.table_name, { is_enabled: e.target.checked })
+                        void updateTable(selected.table_name, {
+                          is_enabled: e.target.checked,
+                        })
                       }
                     />
                     <span aria-hidden="true" />
@@ -629,7 +661,7 @@ export function McpSchemaPanel() {
               </div>
 
               <div className="mcp-tool-form">
-                <label>
+                <label className="wide">
                   <span>用途说明</span>
                   <textarea
                     rows={3}
@@ -680,54 +712,46 @@ export function McpSchemaPanel() {
                       : "未刷新"}
                   </small>
                 </header>
-                <div>
-                  {selected.column_schema.length === 0 ? (
-                    <p>尚未刷新 Schema，点击下方按钮从数据库自动发现列结构。</p>
-                  ) : (
-                    selected.column_schema.map((col) => (
-                      <span key={col.name}>
-                        <code>
+                {selected.column_schema.length === 0 ? (
+                  <p>尚未刷新 Schema，点击下方按钮从数据库自动发现列结构。</p>
+                ) : (
+                  <div className="mcp-column-grid">
+                    {selected.column_schema.map((col) => (
+                      <article key={col.name} className="mcp-column-row">
+                        <span className="col-name">
                           {col.name}
-                          {col.is_primary_key ? " PK" : ""}
-                        </code>
-                        <small>
-                          {col.type}
-                          {!col.nullable ? " NOT NULL" : ""}
-                          {col.references
-                            ? ` → ${col.references.table}.${col.references.column}`
-                            : ""}
-                          {col.comment ? ` - ${col.comment}` : ""}
-                        </small>
-                      </span>
-                    ))
-                  )}
-                </div>
+                          {col.is_primary_key && <span className="pk">PK</span>}
+                        </span>
+                        <span className="col-meta">
+                          {col.references && (
+                            <span>FK → {col.references.table}.{col.references.column}</span>
+                          )}
+                          {col.comment && <span>- {col.comment}</span>}
+                          {!col.nullable && <em>NOT NULL</em>}
+                        </span>
+                        <span className="col-type">{col.type}</span>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </section>
 
               {/* 示例数据 */}
               {selected.sample_rows && selected.sample_rows.length > 0 && (
-                <section className="mcp-schema">
+                <section className="mcp-schema mcp-schema-sample">
                   <header>
                     <strong>示例数据</strong>
                     <small>前 {selected.sample_rows.length} 行</small>
                   </header>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+                  <div className="mcp-sample-wrap">
+                    <table className="mcp-sample-table">
                       <thead>
                         <tr>
-                          {Object.keys(selected.sample_rows[0]).slice(0, 6).map((k) => (
-                            <th
-                              key={k}
-                              style={{
-                                padding: "4px 8px",
-                                textAlign: "left",
-                                borderBottom: "1px solid var(--border)",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {k}
-                            </th>
-                          ))}
+                          {Object.keys(selected.sample_rows[0])
+                            .slice(0, 6)
+                            .map((k) => (
+                              <th key={k}>{k}</th>
+                            ))}
                         </tr>
                       </thead>
                       <tbody>
@@ -738,16 +762,9 @@ export function McpSchemaPanel() {
                               .map((v, j) => (
                                 <td
                                   key={j}
-                                  style={{
-                                    padding: "4px 8px",
-                                    borderBottom: "1px solid var(--border-subtle)",
-                                    maxWidth: "200px",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}
+                                  className={v == null ? "cell-null" : undefined}
                                 >
-                                  {String(v ?? "NULL")}
+                                  {v == null ? "NULL" : String(v)}
                                 </td>
                               ))}
                           </tr>
@@ -760,7 +777,8 @@ export function McpSchemaPanel() {
 
               {selected.last_refreshed_at && (
                 <p className="anspire-notice" role="status">
-                  Schema 最后刷新：{new Date(selected.last_refreshed_at).toLocaleString("zh-CN")}
+                  Schema 最后刷新：
+                  {new Date(selected.last_refreshed_at).toLocaleString("zh-CN")}
                 </p>
               )}
               {error && <p className="anspire-error" role="alert">{error}</p>}
@@ -787,10 +805,478 @@ export function McpSchemaPanel() {
                   </button>
                 </div>
               </footer>
-            </>
+            </form>
           )}
         </section>
       </div>
     </main>
+  );
+}
+
+// ====================== Skills ======================
+
+type SkillEditMode =
+  | { kind: "closed" }
+  | { kind: "create" }
+  | { kind: "edit"; skill: Skill }
+  | { kind: "loading"; skillId: string; skillName: string };
+
+type SkillFileEntry = { path: string; content: string };
+
+const SKILL_ALLOWED_EXTENSIONS = [".md", ".txt", ".py", ".js", ".yaml", ".yml", ".json", ".sh", ".toml"];
+
+function validateSkillFilePath(path: string): string | null {
+  if (!path) return "文件路径不能为空";
+  if (path.split("/").includes("..")) return "文件路径不能包含 '..'";
+  if (path.startsWith("/")) return "文件路径不能以 '/' 开头";
+  const lower = path.toLowerCase();
+  if (!SKILL_ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+    return `文件后缀不允许（允许: ${SKILL_ALLOWED_EXTENSIONS.join(", ")}）`;
+  }
+  return null;
+}
+
+function validateSkillSlug(slug: string): string | null {
+  if (!slug) return "slug 不能为空";
+  if (slug.length > 128) return "slug 长度不能超过 128";
+  if (slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
+    return "slug 不能包含 '..' / '/' / '\\'";
+  }
+  return null;
+}
+
+export function SkillsPanel() {
+  const [list, setList] = useState<SkillListOut | null>(null);
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState<string | false>(false);
+  const [mode, setMode] = useState<SkillEditMode>({ kind: "closed" });
+
+  useEffect(() => {
+    let cancelled = false;
+    productionServices.adminSkills.list()
+      .then((data) => { if (!cancelled) setList(data); })
+      .catch((err) => { if (!cancelled) setError(humanizeApiError(err)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!list) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return list.skills;
+    return list.skills.filter(
+      (s) => s.slug.toLowerCase().includes(q) || s.name.toLowerCase().includes(q),
+    );
+  }, [list, query]);
+
+  async function refreshList() {
+    try {
+      const data = await productionServices.adminSkills.list();
+      setList(data);
+    } catch (err) {
+      setError(humanizeApiError(err));
+    }
+  }
+
+  async function toggleEnabled(item: SkillListItem) {
+    setBusy(`toggle:${item.id}`);
+    setError("");
+    setNotice("");
+    try {
+      await productionServices.adminSkills.update(item.id, { is_enabled: !item.is_enabled });
+      setNotice(item.is_enabled ? `已停用 ${item.name}` : `已启用 ${item.name}`);
+      await refreshList();
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSkill(item: SkillListItem) {
+    if (!window.confirm(`确认删除技能「${item.name}」？此操作不可撤销。`)) return;
+    setBusy(`del:${item.id}`);
+    setError("");
+    setNotice("");
+    try {
+      await productionServices.adminSkills.remove(item.id);
+      setNotice(`已删除 ${item.name}`);
+      await refreshList();
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="production-admin-main">
+      <header className="production-admin-heading">
+        <div>
+          <p>运营资产</p>
+          <h1>技能管理</h1>
+          <span>在此维护 Prompt Skills，启用后可在对话中按需被自动加载。</span>
+        </div>
+        <div className="production-admin-heading-actions">
+          {list && (
+            <span
+              className={`production-admin-status ${
+                list.enabled_count > 0 ? "positive" : "attention"
+              }`}
+            >
+              <i aria-hidden="true" />
+              {list.enabled_count > 0 ? "运行中" : "未启用"} · 共 {list.total} 项
+            </span>
+          )}
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => {
+              setError("");
+              setNotice("");
+              setMode({ kind: "create" });
+            }}
+          >
+            新建技能
+          </button>
+        </div>
+      </header>
+
+      <section className="harness-section skills-section">
+        <header>
+          <div>
+            <small>SKILLS</small>
+            <h2>已注册技能</h2>
+          </div>
+          <input
+            type="search"
+            placeholder="搜索 slug 或名称"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </header>
+
+        {error && <p className="anspire-error" role="alert">{error}</p>}
+        {notice && <p className="anspire-notice" role="status">{notice}</p>}
+
+        {filtered.length === 0 ? (
+          <p className="skills-empty">
+            <strong>暂无技能</strong>
+            点击右上角「新建技能」开始配置。
+          </p>
+        ) : (
+          <table className="skills-list-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>Slug</th>
+                <th>状态</th>
+                <th>文件数</th>
+                <th style={{ textAlign: "right" }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <span className="name">
+                      <strong>{item.name}</strong>
+                      {item.description && <small>{item.description}</small>}
+                    </span>
+                  </td>
+                  <td><span className="slug">{item.slug}</span></td>
+                  <td>
+                    <span className={`state ${item.is_enabled ? "on" : ""}`}>
+                      <i aria-hidden="true" />
+                      {item.is_enabled ? "启用" : "停用"}
+                    </span>
+                  </td>
+                  <td><span className="count">{item.file_count}</span></td>
+                  <td className="row-actions">
+                    <div>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        disabled={busy !== false}
+                        onClick={() => {
+                          setError("");
+                          setNotice("");
+                          setMode({ kind: "loading", skillId: item.id, skillName: item.name });
+                          void loadSkillDetail(item.id);
+                        }}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        disabled={busy !== false}
+                        onClick={() => void toggleEnabled(item)}
+                      >
+                        {item.is_enabled ? "停用" : "启用"}
+                      </button>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        disabled={busy !== false}
+                        onClick={() => void removeSkill(item)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {mode.kind === "loading" && (
+        <section className="skills-section-loading" aria-live="polite">
+          <i aria-hidden="true" />
+          正在加载「{mode.skillName}」…
+        </section>
+      )}
+      {mode.kind !== "closed" && mode.kind !== "loading" && (
+        <SkillEditor
+          mode={mode}
+          onClose={() => setMode({ kind: "closed" })}
+          onSaved={async (msg) => {
+            setNotice(msg);
+            setMode({ kind: "closed" });
+            await refreshList();
+          }}
+        />
+      )}
+    </main>
+  );
+
+  async function loadSkillDetail(skillId: string) {
+    setBusy("load");
+    setError("");
+    try {
+      const detail = await productionServices.adminSkills.get(skillId);
+      setMode({ kind: "edit", skill: detail });
+    } catch (err) {
+      setError(humanizeApiError(err));
+      setMode({ kind: "closed" });
+    } finally {
+      setBusy(false);
+    }
+  }
+}
+
+function SkillEditor({
+  mode,
+  onClose,
+  onSaved,
+}: {
+  mode: Extract<SkillEditMode, { kind: "create" | "edit" }>;
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+}) {
+  const isCreate = mode.kind === "create";
+  const [slug, setSlug] = useState(mode.kind === "create" ? "" : mode.skill.slug);
+  const [name, setName] = useState(mode.kind === "create" ? "" : mode.skill.name);
+  const [description, setDescription] = useState(mode.kind === "create" ? "" : mode.skill.description);
+  const [rootFile, setRootFile] = useState(mode.kind === "create" ? "SKILL.md" : mode.skill.root_file);
+  const [isEnabled, setIsEnabled] = useState(mode.kind === "create" ? false : mode.skill.is_enabled);
+  const [files, setFiles] = useState<SkillFileEntry[]>(() => {
+    if (mode.kind === "edit") {
+      return Object.entries(mode.skill.files).map(([path, content]) => ({ path, content }));
+    }
+    return [{ path: "SKILL.md", content: "# 新技能\n\n描述这个技能的用途。\n" }];
+  });
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function addFile() {
+    setFiles((prev) => [...prev, { path: "", content: "" }]);
+  }
+
+  function updateFile(index: number, patch: Partial<SkillFileEntry>) {
+    setFiles((prev) => prev.map((f, i) => (i === index ? { ...f, ...patch } : f)));
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function validate(): string | null {
+    if (isCreate) {
+      const slugErr = validateSkillSlug(slug);
+      if (slugErr) return slugErr;
+    }
+    if (!name.trim()) return "名称不能为空";
+    if (!rootFile.trim()) return "主入口文件不能为空";
+    const rootErr = validateSkillFilePath(rootFile);
+    if (rootErr) return `主入口文件：${rootErr}`;
+    const seenPaths = new Set<string>();
+    for (const f of files) {
+      const pathErr = validateSkillFilePath(f.path);
+      if (pathErr) return `${f.path || "(空路径)"}: ${pathErr}`;
+      if (seenPaths.has(f.path)) return `文件路径重复: ${f.path}`;
+      seenPaths.add(f.path);
+    }
+    if (!files.some((f) => f.path === rootFile)) {
+      return `主入口文件「${rootFile}」必须在文件列表中`;
+    }
+    return null;
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const err = validate();
+    if (err) { setError(err); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const filesMap: Record<string, string> = {};
+      for (const f of files) filesMap[f.path] = f.content;
+      if (isCreate) {
+        const payload: SkillCreate = { slug, name, description, root_file: rootFile, is_enabled: isEnabled, files: filesMap };
+        await productionServices.adminSkills.create(payload);
+        onSaved(`已创建技能「${name}」`);
+      } else {
+        const payload: SkillUpdate = { name, description, root_file: rootFile, is_enabled: isEnabled, files: filesMap };
+        await productionServices.adminSkills.update(mode.skill.id, payload);
+        onSaved(`已保存技能「${name}」`);
+      }
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="harness-section skills-section skills-editor-section">
+      <header>
+        <div>
+          <small>{isCreate ? "CREATE" : "EDIT"}</small>
+          <h2>{isCreate ? "新建技能" : `编辑：${mode.skill.name}`}</h2>
+        </div>
+        <button className="secondary-button" type="button" onClick={onClose}>关闭</button>
+      </header>
+
+      <form className="skills-editor-form" onSubmit={(e) => void handleSubmit(e)}>
+        <div className="skills-editor-grid">
+          <div className="skills-editor-field">
+            <label htmlFor="skill-slug">
+              Slug <span className="hint">唯一标识</span>
+            </label>
+            <input
+              id="skill-slug"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              disabled={!isCreate}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {!isCreate && <small>slug 创建后不可修改</small>}
+          </div>
+
+          <div className="skills-editor-field">
+            <label htmlFor="skill-name">名称</label>
+            <input
+              id="skill-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
+          <div className="skills-editor-field span-full">
+            <label htmlFor="skill-description">描述</label>
+            <input
+              id="skill-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="一句话概述这个技能的用途"
+            />
+          </div>
+
+          <div className="skills-editor-field span-full">
+            <label htmlFor="skill-root-file">
+              主入口文件 <span className="hint">相对路径</span>
+            </label>
+            <input
+              id="skill-root-file"
+              value={rootFile}
+              onChange={(e) => setRootFile(e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="SKILL.md"
+            />
+            <small>必须在下方文件列表中存在</small>
+          </div>
+        </div>
+
+        <div className="skills-editor-files">
+          <div className="skills-editor-files-meta">
+            <small>FILES</small>
+            <h3>文件列表</h3>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={addFile}
+              style={{ minHeight: "30px", padding: "0 10px", fontSize: "10.5px" }}
+            >
+              + 添加文件
+            </button>
+          </div>
+
+          {files.map((f, i) => (
+            <article key={i} className="skills-editor-file">
+              <div className="skills-editor-file-meta-row">
+                <span className="file-index">{i + 1}</span>
+                <input
+                  placeholder="相对路径，如 SKILL.md 或 tools/hello.md"
+                  value={f.path}
+                  onChange={(e) => updateFile(i, { path: e.target.value })}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  className="danger-button file-remove"
+                  style={{ minHeight: "30px", padding: "0 10px", fontSize: "10px" }}
+                  onClick={() => removeFile(i)}
+                >
+                  删除文件
+                </button>
+              </div>
+              <textarea
+                className="skills-editor-file-content"
+                placeholder="文件内容"
+                value={f.content}
+                onChange={(e) => updateFile(i, { content: e.target.value })}
+              />
+            </article>
+          ))}
+        </div>
+
+        {error && <p className="anspire-error" role="alert">{error}</p>}
+
+        <div className="skills-editor-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onClose}
+            disabled={busy}
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={busy}
+          >
+            {busy ? "保存中…" : (isCreate ? "创建技能" : "保存修改")}
+          </button>
+        </div>
+      </form>
+    </section>
   );
 }

@@ -69,6 +69,7 @@ class ChatRequest(BaseModel):
     enabled_toolsets: list[str] | None = None
     disabled_toolsets: list[str] | None = None
     mcp_servers: list[dict] | None = None
+    skills: list[str] | None = Field(default=None, description="启用的 skill slugs")
     stream: bool = True
 
 
@@ -148,6 +149,7 @@ async def chat_completions(
                 enabled_toolsets=req.enabled_toolsets,
                 disabled_toolsets=req.disabled_toolsets,
                 mcp_servers=req.mcp_servers,
+                skills=req.skills,
             ):
                 data: dict[str, Any] = {
                     "type": event.type,

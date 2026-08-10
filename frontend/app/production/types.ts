@@ -666,6 +666,56 @@ export type Report = {
   content: Record<string, unknown> | null;
 };
 
+// ====== Skill ======
+
+export type Skill = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  is_enabled: boolean;
+  root_file: string;
+  files: Record<string, string>;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SkillListItem = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  is_enabled: boolean;
+  root_file: string;
+  file_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SkillListOut = {
+  skills: SkillListItem[];
+  total: number;
+  enabled_count: number;
+};
+
+export type SkillCreate = {
+  slug: string;
+  name: string;
+  description?: string;
+  root_file?: string;
+  is_enabled?: boolean;
+  files: Record<string, string>;
+};
+
+export type SkillUpdate = {
+  name?: string;
+  description?: string;
+  root_file?: string;
+  is_enabled?: boolean;
+  files?: Record<string, string>;
+};
+
 export type Job = {
   id: string;
   job_type: string;

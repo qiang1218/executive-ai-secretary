@@ -14,7 +14,10 @@ import { defineConfig } from "vite";
  */
 export default defineConfig(() => ({
   server: {
-    host: "127.0.0.1",
+    // 绑定 IPv6 ::（Node 默认 dual-stack，同时接受 IPv4 请求）
+    // 避免浏览器把 localhost 解析到 ::1 时连接失败
+    // （会导致 "Failed to fetch dynamically imported module"）
+    host: "::",
     port: 3000,
     strictPort: true,   // 3000 被占时直接报错，不再 fallback
     proxy: {
