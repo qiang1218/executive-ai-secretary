@@ -500,7 +500,6 @@ class HarnessAdminService:
                     model_id=provider["model_id"],
                 )
                 rewrite_data = _parse_json_response(response["text"])
-                print(rewrite_data)
                 query_spec = normalize_query_spec(
                     rewrite_data,
                     question=rewritten_question,

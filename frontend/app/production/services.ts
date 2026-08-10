@@ -28,6 +28,8 @@ import type {
   McpSchemaCatalog,
   McpSchemaUpdate,
   McpSchemaRefreshOut,
+  McpSchemaCandidateList,
+  McpSchemaDeleteOut,
   MessageEvidence,
   ModelProviderConfig,
   ModelProviderTest,

@@ -12,6 +12,43 @@ from configs.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
+# status_code -> machine-readable code. 5xx 与 4xx 区分，便于审计/call_site 直接
+# 落精确 failure_reason_code，不再把"模型名无效 / 限流 / 上游挂"全收口成一个。
+_ANSPIRE_STATUS_TO_ERROR_CODE: dict[int, str] = {
+    401: "anspire_invalid_api_key",
+    403: "anspire_forbidden",
+    404: "anspire_model_not_found",
+    408: "anspire_request_timeout",
+    413: "anspire_request_too_large",
+    429: "anspire_rate_limited",
+    500: "anspire_internal_error",
+    502: "anspire_upstream_bad_gateway",
+    503: "anspire_upstream_unavailable",
+    504: "anspire_upstream_timeout",
+}
+
+
+def _extract_error_snippet(response: httpx.Response, *, limit: int = 300) -> str:
+    """从 Anspire 错误响应里拽出可读片段。优先 JSON 的 ``error.message``。"""
+    text = response.text or ""
+    if not text:
+        return ""
+    try:
+        body = response.json()
+    except ValueError:
+        return text[:limit]
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message")
+            if msg:
+                return str(msg)[:limit]
+        msg = body.get("message") or body.get("detail")
+        if msg:
+            return str(msg)[:limit]
+    return text[:limit]
+
+
 class HermesClientError(RuntimeError):
     """worker ``/v1/profile/run`` 失败。携带 status_code 与 machine-readable code
     让上层(``simulate_harness`` 等)能按类别分发最终 HTTP code,不再把所有错误
@@ -252,18 +289,54 @@ class HermesClient:
                             {"role": "system", "content": "Reply with only: OK"},
                             {"role": "user", "content": "connection test"},
                         ],
-                        "max_tokens": 8,
-                        "temperature": 0,
+                        # max_tokens + temperature 都故意不传：
+                        # - Anspire 的 gpt-5.5 / gpt-5.6-sol 上游只要收到
+                        #   max_tokens 字段就 503 GW_SERVICE_UNAVAILABLE；
+                        # - 显式 temperature=0 会被 400 GW_REQUEST_INVALID 拒绝
+                        #   ("Only the default (1) value is supported")。
+                        # 让 provider 用自己默认即可。
                     },
                 )
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Anspire gateway unavailable: {exc}") from exc
+            latency_ms = round((time.monotonic() - started) * 1000)
+            logger.error(
+                "anspire_test_unreachable model=%s latency_ms=%s error=%s",
+                model_id,
+                latency_ms,
+                exc,
+            )
+            raise HermesClientError(
+                code="anspire_connection_failed",
+                status_code=502,
+                message=f"Anspire gateway unavailable: {exc}",
+            ) from exc
 
         latency_ms = round((time.monotonic() - started) * 1000)
 
         if response.status_code >= 400:
-            raise RuntimeError(
-                f"Anspire provider test failed: HTTP {response.status_code}"
+            snippet = _extract_error_snippet(response)
+            code = _ANSPIRE_STATUS_TO_ERROR_CODE.get(
+                response.status_code, "anspire_connection_failed"
+            )
+            request_id = response.headers.get("x-request-id") or response.headers.get(
+                "x-anspire-request-id"
+            )
+            logger.error(
+                "anspire_test_failed model=%s status=%s code=%s "
+                "latency_ms=%s request_id=%s body=%s",
+                model_id,
+                response.status_code,
+                code,
+                latency_ms,
+                request_id or "-",
+                snippet or "-",
+            )
+            suffix = f": {snippet}" if snippet else ""
+            raise HermesClientError(
+                code=code,
+                status_code=response.status_code,
+                message=f"Anspire provider test failed: HTTP {response.status_code} "
+                f"({code}){suffix}",
             )
         try:
             result = response.json()

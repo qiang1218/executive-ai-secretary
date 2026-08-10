@@ -265,6 +265,8 @@ export function ProductionWorkspace({
         ?? bootstrap.authorizedModels[0]?.model_id
         ?? "",
     );
+    // 同步地址栏，让 URL 始终反映当前打开的会话（支持复制深链/前进后退）
+    window.history.replaceState(null, "", `${window.location.pathname}?conversation=${encodeURIComponent(conversation.id)}`);
     try {
       const result = await productionServices.conversations.messages(conversation.id);
       setMessages(result.items);
@@ -285,7 +287,12 @@ export function ProductionWorkspace({
     const conversationId = new URLSearchParams(window.location.search).get("conversation");
     if (!conversationId) return;
     const conversation = initialBootstrap.conversations.find((item) => item.id === conversationId);
-    if (!conversation) return;
+    if (!conversation) {
+      // URL 里的 conversation ID 不属于当前用户（例如换账号登录后的历史残留），
+      // 清除 query param 避免地址栏显示一个无权访问的会话 ID 造成误导
+      window.history.replaceState(null, "", window.location.pathname);
+      return;
+    }
     const timer = window.setTimeout(() => void openConversation(conversation), 0);
     return () => window.clearTimeout(timer);
   }, [initialBootstrap.conversations, openConversation]);
