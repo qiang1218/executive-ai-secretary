@@ -23,8 +23,16 @@ async def normalize_scope(
     db: AsyncSession,
     principal: Principal,
     scope: OrganizationScopeInput,
+    *,
+    allowed: set[uuid.UUID] | None = None,
 ) -> tuple[OrganizationScopeInput, list[uuid.UUID]]:
-    allowed = await accessible_organization_unit_ids(db, principal)
+    """归一化会话的事业部范围。
+
+    传入 ``allowed`` 可跳过 ``accessible_organization_unit_ids`` 查询，
+    用于列表场景下避免 N+1（同一 principal 多次调用时结果不变）。
+    """
+    if allowed is None:
+        allowed = await accessible_organization_unit_ids(db, principal)
     if scope.mode == "all_authorized":
         return scope, sorted(allowed, key=str)
     requested = set(scope.organization_unit_ids)
@@ -97,9 +105,11 @@ async def scope_out(
     db: AsyncSession,
     principal: Principal,
     conversation: Conversation,
+    *,
+    allowed: set[uuid.UUID] | None = None,
 ) -> OrganizationScopeOut:
     scope = await persisted_scope(db, conversation)
-    normalized, resolved = await normalize_scope(db, principal, scope)
+    normalized, resolved = await normalize_scope(db, principal, scope, allowed=allowed)
     return OrganizationScopeOut(
         mode=normalized.mode,
         organization_unit_ids=normalized.organization_unit_ids,

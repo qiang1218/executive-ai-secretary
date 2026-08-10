@@ -19,7 +19,11 @@ from exceptions.errors import AppError
 from models import Memory, MemoryEvent, new_uuid
 from repositories import conversation as conversation_repo
 from repositories.audit import record_audit
-from services.authz import Principal, assert_org_scope
+from services.authz import (
+    Principal,
+    accessible_organization_unit_ids,
+    assert_org_scope,
+)
 from services.personal_data import ensure_memory_encrypted, set_memory_content
 from schemas import MemoryCreate, MemoryOut, MemoryUpdate, Page
 
@@ -73,10 +77,17 @@ class MemoryService:
             statement.order_by(Memory.updated_at.desc()).limit(100)
         )
         rows = result.all()
+        if not rows:
+            await self._session.commit()
+            return Page(items=[])
+        # 预计算可访问事业部集合（只查一次 DB），避免 N+1
+        allowed = await accessible_organization_unit_ids(self._session, principal)
         visible = []
         for item in rows:
             try:
-                await assert_org_scope(self._session, principal, item.organization_unit_id)
+                await assert_org_scope(
+                    self._session, principal, item.organization_unit_id, allowed=allowed
+                )
             except AppError:
                 continue
             visible.append(self._memory_out(item))

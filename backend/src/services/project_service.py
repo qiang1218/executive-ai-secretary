@@ -22,7 +22,11 @@ from models import Conversation, Project, ProjectConversation
 from repositories import project as project_repo
 from repositories.audit import record_audit
 from schemas import Page, ProjectCreate, ProjectOut, ProjectUpdate
-from services.authz import Principal, assert_org_scope
+from services.authz import (
+    Principal,
+    accessible_organization_unit_ids,
+    assert_org_scope,
+)
 from services.idempotency import replay, save_response
 
 
@@ -66,10 +70,16 @@ class ProjectService:
         )
         next_cursor = encode_cursor(rows[limit - 1].id) if len(rows) > limit else None
         rows = rows[:limit]
+        if not rows:
+            return Page(items=[], next_cursor=next_cursor)
+        # 预计算可访问事业部集合（只查一次 DB），避免 N+1
+        allowed = await accessible_organization_unit_ids(self._session, principal)
         visible = []
         for item in rows:
             try:
-                await assert_org_scope(self._session, principal, item.organization_unit_id)
+                await assert_org_scope(
+                    self._session, principal, item.organization_unit_id, allowed=allowed
+                )
             except AppError:
                 continue
             visible.append(ProjectOut.model_validate(item))

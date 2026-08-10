@@ -183,8 +183,16 @@ async def assert_org_scope(
     db: AsyncSession,
     principal: Principal,
     organization_unit_id: uuid.UUID | None,
+    *,
+    allowed: set[uuid.UUID] | None = None,
 ) -> None:
-    allowed = await accessible_organization_unit_ids(db, principal)
+    """断言 principal 可访问指定事业部。
+
+    传入 ``allowed`` 可跳过 ``accessible_organization_unit_ids`` 查询，
+    用于列表场景下避免 N+1（同一 principal 多次调用时结果不变）。
+    """
+    if allowed is None:
+        allowed = await accessible_organization_unit_ids(db, principal)
     if not allowed:
         raise AppError(403, "data_scope_forbidden", "当前账号没有有效的事业部查询范围")
     if organization_unit_id is not None and organization_unit_id not in allowed:
@@ -245,8 +253,14 @@ async def scope_snapshot_is_current_for_user(
     db: AsyncSession,
     user: User,
     snapshot: dict[str, object] | None,
+    *,
+    current: set[uuid.UUID] | None = None,
 ) -> bool:
-    """Fail closed unless every snapshotted unit remains usable and granted."""
+    """Fail closed unless every snapshotted unit remains usable and granted.
+
+    传入 ``current`` 可跳过 ``accessible_organization_unit_ids_for_user`` 查询，
+    用于列表场景下避免 N+1（同一 user 多次调用时结果不变）。
+    """
     if not snapshot:
         return False
     try:
@@ -255,7 +269,8 @@ async def scope_snapshot_is_current_for_user(
         return False
     if not required:
         return snapshot.get("general_only") is True
-    current = await accessible_organization_unit_ids_for_user(db, user)
+    if current is None:
+        current = await accessible_organization_unit_ids_for_user(db, user)
     if not required.issubset(current):
         return False
     if snapshot.get("enterprise_wide"):

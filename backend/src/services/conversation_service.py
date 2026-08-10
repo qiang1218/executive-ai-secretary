@@ -29,6 +29,7 @@ from exceptions.errors import AppError
 from models import (
     Clarification,
     Conversation,
+    ConversationOrganizationScope,
     HarnessConfigVersion,
     HarnessDiagnosticGrant,
     Job,
@@ -54,9 +55,10 @@ from schemas import (
     MessageEvidenceOut,
     MessageOut,
     OrganizationScopeInput,
+    OrganizationScopeOut,
     Page,
 )
-from services.authz import Principal, assert_org_scope
+from services.authz import Principal, accessible_organization_unit_ids, assert_org_scope
 from services.conversation_scope import (
     legacy_scope,
     normalize_scope,
@@ -188,17 +190,85 @@ class ConversationService:
         )
         rows = result.all()
         next_cursor = encode_cursor(rows[limit - 1].id) if len(rows) > limit else None
-        visible = []
-        for item in rows[:limit]:
+        page_rows = rows[:limit]
+        if not page_rows:
+            return Page(items=[], next_cursor=next_cursor)
+
+        # ── 批量预加载，避免 N+1 ────────────────────────────────────────────
+        # 旧实现每条会话触发 6-7 次查询（persisted_scope + normalize_scope +
+        # project_id + scope_out），50 条即 300+ 次。这里改为 4 次批量查询。
+        page_ids = [c.id for c in page_rows]
+
+        # 1) accessible org unit ids：同一 principal 不变，只查一次
+        allowed = await accessible_organization_unit_ids(self._session, principal)
+
+        # 2) 批量查 ConversationOrganizationScope
+        scope_result = await self._session.scalars(
+            select(ConversationOrganizationScope)
+            .where(ConversationOrganizationScope.conversation_id.in_(page_ids))
+            .order_by(
+                ConversationOrganizationScope.conversation_id,
+                ConversationOrganizationScope.organization_unit_id,
+            )
+        )
+        scope_map: dict[uuid.UUID, list[uuid.UUID]] = {}
+        for s in scope_result.all():
+            scope_map.setdefault(s.conversation_id, []).append(s.organization_unit_id)
+
+        # 3) 批量查 ProjectConversation（一个会话可能属于多个 project，取最新一条）
+        proj_result = await self._session.execute(
+            select(
+                ProjectConversation.conversation_id, ProjectConversation.project_id
+            ).where(ProjectConversation.conversation_id.in_(page_ids))
+        )
+        proj_map: dict[uuid.UUID, uuid.UUID] = {}
+        for cid, pid in proj_result.all():
+            proj_map[cid] = pid
+
+        # ── 构造 ConversationOut ───────────────────────────────────────────
+        visible: list[ConversationOut] = []
+
+        for item in page_rows:
+            # 计算 scope（使用 scope_map，不重新查询）
+            if item.scope_mode == "all_authorized":
+                scope = OrganizationScopeInput(
+                    mode="all_authorized", organization_unit_ids=[]
+                )
+            else:
+                ids = scope_map.get(item.id, [])
+                if not ids and item.organization_unit_id is not None:
+                    ids = [item.organization_unit_id]
+                if not ids:
+                    continue  # damaged scope, skip
+                scope = OrganizationScopeInput(mode="selected", organization_unit_ids=ids)
+
             try:
-                await normalize_scope(
-                    self._session,
-                    principal,
-                    await persisted_scope(self._session, item),
+                normalized, resolved = await normalize_scope(
+                    self._session, principal, scope, allowed=allowed
                 )
             except AppError:
                 continue
-            visible.append(await self._conversation_out(principal, item))
+
+            visible.append(
+                ConversationOut(
+                    id=item.id,
+                    title=item.title,
+                    organization_unit_id=item.organization_unit_id,
+                    organization_scope=OrganizationScopeOut(
+                        mode=normalized.mode,
+                        organization_unit_ids=normalized.organization_unit_ids,
+                        resolved_organization_unit_ids=resolved,
+                    ),
+                    project_id=proj_map.get(item.id),
+                    selected_model_id=item.selected_model_id,
+                    status=item.status,
+                    pinned_at=item.pinned_at,
+                    archived_at=item.archived_at,
+                    last_message_at=item.last_message_at,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                )
+            )
         return Page(items=visible, next_cursor=next_cursor)
 
     async def get_conversation(

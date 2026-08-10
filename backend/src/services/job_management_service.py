@@ -66,13 +66,25 @@ class JobManagementService:
         return item
 
     async def list_jobs(self, principal: Principal) -> Page:
-        """List the principal's jobs, filtered by current scope validity."""
+        """List the principal's jobs, filtered by current scope validity.
+
+        优化：accessible_organization_unit_ids_for_user 对同一 user 不变，
+        只查一次后传入 ``scope_snapshot_is_current_for_user``，避免 N+1。
+        """
         rows = await job_repo.list_by_owner(self._session, principal, limit=100)
+        if not rows:
+            return Page(items=[])
+        # 预计算当前可访问事业部集合（只查一次 DB）
+        from services.authz import accessible_organization_unit_ids_for_user
+
+        current = await accessible_organization_unit_ids_for_user(
+            self._session, principal.user
+        )
         visible = [
             item
             for item in rows
             if await scope_snapshot_is_current_for_user(
-                self._session, principal.user, item.scope_snapshot_json
+                self._session, principal.user, item.scope_snapshot_json, current=current
             )
         ]
         return Page(items=[JobOut.model_validate(item) for item in visible])
