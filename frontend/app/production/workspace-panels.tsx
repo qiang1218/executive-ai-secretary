@@ -41,6 +41,7 @@ import {
   recordItems,
 } from "./workspace-utils";
 import { EmptyState } from "./workspace-dialogs";
+import { EmailAccountsPanel } from "./email-accounts-panel";
 
 export function WorkspaceDetailPanel({
   panel,
@@ -95,6 +96,7 @@ export function WorkspaceDetailPanel({
     history: "历史会话",
     memory: "长期记忆",
     scope: "可查询范围",
+    email: "我的邮箱",
   };
   const reportPanel = panel === "daily" || panel === "weekly";
   return (
@@ -110,6 +112,7 @@ export function WorkspaceDetailPanel({
           {panel === "history" && <ProductionHistoryPanel conversations={conversations} language={language} onOpen={onOpenConversation} onNew={onNewConversation} onRename={onRenameConversation} onArchive={onArchiveConversation} />}
           {panel === "memory" && <ProductionMemoryPanel memories={memories} organizationUnits={organizationUnits} enabled={memoryEnabled} setEnabled={setMemoryEnabled} onCreate={onCreateMemory} onUpdate={onUpdateMemory} onDelete={onDeleteMemory} />}
           {panel === "scope" && <ProductionScopePanel organizationUnits={organizationUnits} dataCapabilities={dataCapabilities} />}
+          {panel === "email" && <EmailAccountsPanel />}
         </div>
       </aside>
     </div>

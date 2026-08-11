@@ -160,6 +160,33 @@ class McpSchemaRegistry(UUIDMixin, TimestampMixin, Base):
     schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # ── 向量索引配置（manual trigger 模式） ────────────────
+    # 管理端手动配置：哪些列拼接成 content_text，哪些列作为冗余 metadata 用于过滤。
+    # 格式：{"content_fields": ["display_name", "customer_name", "description"],
+    #        "metadata_fields": ["status", "customer_id", "industry"],
+    #        "content_template": null}  # 可选：自定义拼接模板，留空则用空格连接 content_fields
+    embedding_config_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONType, default=dict, nullable=False
+    )
+    # 索引构建状态机：idle / running / succeeded / failed / partial_success。
+    # - idle: 未触发过 / 已就绪
+    # - running: 正在构建（含子进程未及时回收时的"僵尸"状态，由 30min 超时检测兜底）
+    # - succeeded: 上次构建全部成功
+    # - partial_success: 上次构建部分行失败（error_message 记录失败数）
+    # - failed: 上次构建整体失败
+    embedding_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="idle"
+    )
+    # 上次构建的摘要：{"total": 100, "indexed": 95, "failed": 5, "skipped": 0,
+    #                "duration_seconds": 12.5, "finished_at": "2026-08-11T..."}
+    embedding_summary_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONType, default=dict, nullable=False
+    )
+    embedding_locked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 class OpportunityExperienceWeightPolicy(UUIDMixin, TimestampMixin, Base):
     """Versioned, auditable experience weights used for pipeline forecasting.

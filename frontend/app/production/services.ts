@@ -14,6 +14,12 @@ import type {
   DataSource,
   DataSourceTest,
   DataSyncRun,
+  DigestGenerateOut,
+  EmailAccount,
+  EmailAccountCreate,
+  EmailAccountTestOut,
+  EmailAccountUpdate,
+  EmailSyncEnqueueOut,
   ExecutivePersonalProfile,
   FileRecord,
   HarnessBusinessConfig,
@@ -23,28 +29,36 @@ import type {
   HarnessTrace,
   HarnessVersion,
   Job,
-  Memory,
-  McpSchemaRecord,
+  ManualRun,
+  MarkReadRequest,
+  MarkReadResult,
   McpSchemaCatalog,
-  McpSchemaUpdate,
-  McpSchemaRefreshOut,
   McpSchemaCandidateList,
   McpSchemaDeleteOut,
+  McpSchemaRecord,
+  McpSchemaRefreshOut,
+  McpSchemaUpdate,
+  EmbeddingConfigIn,
+  EmbeddingConfigOut,
+  EmbeddingStatsOut,
+  EmbeddingTriggerOut,
+  Memory,
   MessageEvidence,
   ModelProviderConfig,
   ModelProviderTest,
+  AppNotification,
   OpportunityExperienceWeightPolicy,
-  OrganizationUnit,
   OrganizationScope,
+  OrganizationUnit,
   ProductionBootstrap,
   Project,
   Report,
   ScheduledTask,
-  ManualRun,
   Skill,
-  SkillListOut,
   SkillCreate,
+  SkillListOut,
   SkillUpdate,
+  UnreadCountOut,
 } from "./types";
 
 function buildFilesListUrl(params: { organizationId?: string; limit?: number; cursor?: string }): string {
@@ -423,6 +437,29 @@ export function createProductionServices(client: ApiClient = apiClient) {
         { method: "POST" },
       );
     },
+    // ── 向量索引（embedding）管理 ──
+    async getEmbeddingConfig(tableName: string) {
+      return client.request<EmbeddingConfigOut>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}/embedding/config`,
+      );
+    },
+    async configureEmbedding(tableName: string, body: EmbeddingConfigIn) {
+      return client.request<EmbeddingConfigOut>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}/embedding/config`,
+        { method: "PUT", body },
+      );
+    },
+    async triggerEmbedding(tableName: string) {
+      return client.request<EmbeddingTriggerOut>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}/embedding/trigger`,
+        { method: "POST" },
+      );
+    },
+    async getEmbeddingStats(tableName: string) {
+      return client.request<EmbeddingStatsOut>(
+        `/admin/mcp-schemas/${encodeURIComponent(tableName)}/embedding/stats`,
+      );
+    },
   };
   // ───────────────────────────────────────────────────────
 
@@ -563,7 +600,78 @@ export function createProductionServices(client: ApiClient = apiClient) {
     },
   };
 
-  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, adminModels, adminHarness, adminMcpSchema, adminData, adminSkills };
+  // ───────────────────────────────────────────────────────
+  // 邮件账户管理
+  // ───────────────────────────────────────────────────────
+  const emailAccounts = {
+    async list(includeDisabled = false): Promise<EmailAccount[]> {
+      const qs = includeDisabled ? "?include_disabled=true" : "";
+      return client.request<EmailAccount[]>(`/email-accounts${qs}`);
+    },
+    async create(payload: EmailAccountCreate): Promise<EmailAccount> {
+      return client.request<EmailAccount>("/email-accounts", {
+        method: "POST",
+        body: payload,
+        headers: idempotencyHeaders(),
+      });
+    },
+    async get(id: string): Promise<EmailAccount> {
+      return client.request<EmailAccount>(`/email-accounts/${encodeURIComponent(id)}`);
+    },
+    async update(id: string, payload: EmailAccountUpdate): Promise<EmailAccount> {
+      return client.request<EmailAccount>(`/email-accounts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: payload,
+      });
+    },
+    async remove(id: string): Promise<void> {
+      await client.request<void>(`/email-accounts/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    },
+    async test(id: string): Promise<EmailAccountTestOut> {
+      return client.request<EmailAccountTestOut>(
+        `/email-accounts/${encodeURIComponent(id)}/test`,
+        { method: "POST" },
+      );
+    },
+    async sync(id: string): Promise<EmailSyncEnqueueOut> {
+      return client.request<EmailSyncEnqueueOut>(
+        `/email-accounts/${encodeURIComponent(id)}/sync`,
+        { method: "POST" },
+      );
+    },
+  };
+
+  // ───────────────────────────────────────────────────────
+  // 站内通知
+  // ───────────────────────────────────────────────────────
+  const notifications = {
+    async list(params: { unreadOnly?: boolean; type?: string; limit?: number } = {}): Promise<AppNotification[]> {
+      const qs = queryString({
+        unread_only: params.unreadOnly ? "true" : null,
+        type: params.type ?? null,
+        limit: params.limit != null ? String(params.limit) : null,
+      });
+      return client.request<AppNotification[]>(`/notifications${qs}`);
+    },
+    async unreadCount(): Promise<UnreadCountOut> {
+      return client.request<UnreadCountOut>("/notifications/unread-count");
+    },
+    async markRead(payload: MarkReadRequest): Promise<MarkReadResult> {
+      return client.request<MarkReadResult>("/notifications/mark-read", {
+        method: "POST",
+        body: payload,
+      });
+    },
+    async generateDigest(): Promise<DigestGenerateOut> {
+      return client.request<DigestGenerateOut>("/notifications/digest", {
+        method: "POST",
+      });
+    },
+  };
+
+  return { auth, organizations, conversations, projects, memories, reports, jobs, data, models, files, emailAccounts, notifications, adminModels, adminHarness, adminMcpSchema, adminData, adminSkills };
 }
 
 export type ProductionServices = ReturnType<typeof createProductionServices>;

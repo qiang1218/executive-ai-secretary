@@ -1,0 +1,457 @@
+:root {
+  --canvas: #e9ece7;
+  --surface: #ffffff;
+  --surface-soft: #f7f9f5;
+  --surface-quiet: #edf1ec;
+  --ink: #1b2521;
+  --ink-soft: #44514b;
+  --muted: #69766f;
+  --faint: #98a19b;
+  --line: #dbe1db;
+  --line-strong: #c8d1c9;
+  --accent: #236652;
+  --accent-dark: #174c3e;
+  --accent-soft: #e1eee8;
+  --positive: #3d6a4c;
+  --positive-bg: #e9f1e9;
+  --attention: #856429;
+  --attention-bg: #f5edd9;
+  --risk: #985047;
+  --risk-bg: #f7e8e5;
+  --neutral-bg: #edf1ed;
+  --radius: 8px;
+  --radius-small: 5px;
+  --header-height: 68px;
+  --content: 1180px;
+  --z-header: 20;
+  --z-overlay: 50;
+  --z-toast: 70;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--canvas);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--ink);
+  background: var(--canvas);
+  font-family: var(--font-geist-sans), "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+summary {
+  outline: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  box-shadow: 0 0 0 3px rgba(35, 102, 82, 0.22);
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+a {
+  color: var(--accent-dark);
+  text-underline-offset: 3px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3,
+strong {
+  text-wrap: balance;
+}
+
+p,
+small,
+dd {
+  text-wrap: pretty;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: #aebbb1;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(35, 102, 82, 0.1);
+}
+
+textarea {
+  resize: vertical;
+}
+
+::selection {
+  color: var(--ink);
+  background: #cfe2d9;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.skip-link {
+  position: fixed;
+  left: 16px;
+  top: 12px;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: var(--radius-small);
+  color: #fff;
+  background: var(--ink);
+  transform: translateY(-160%);
+  transition: transform 180ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.eyebrow {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), "SF Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.brand-glyph {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--ink);
+  border-radius: 7px;
+  color: #fff;
+  background: var(--ink);
+  font-family: "Songti SC", "Noto Serif CJK SC", serif;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.brand-glyph.admin {
+  border-color: var(--accent-dark);
+  background: var(--accent-dark);
+}
+
+.primary-button,
+.secondary-button,
+.danger-button,
+.text-button,
+.danger-text-button,
+.back-link,
+.icon-text-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-small);
+  font-weight: 600;
+  line-height: 1.2;
+  transition: color 180ms ease, background 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.primary-button {
+  padding: 0 18px;
+  color: #fff;
+  background: var(--ink);
+}
+
+.primary-button:hover {
+  background: #333936;
+}
+
+.primary-button:active,
+.secondary-button:active,
+.danger-button:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.primary-button.wide {
+  width: 100%;
+}
+
+.primary-button.compact,
+.secondary-button.compact {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.secondary-button {
+  padding: 0 17px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.secondary-button:hover {
+  border-color: #aeb4af;
+  background: var(--surface-soft);
+}
+
+.danger-button {
+  min-height: 42px;
+  padding: 0 18px;
+  color: #fff;
+  background: var(--risk);
+}
+
+.danger-button:hover {
+  background: #812d2a;
+}
+
+.text-button,
+.danger-text-button,
+.back-link,
+.icon-text-button {
+  min-height: 32px;
+  padding: 0 3px;
+  background: transparent;
+}
+
+.text-button,
+.back-link,
+.icon-text-button {
+  color: var(--accent-dark);
+}
+
+.text-button:hover,
+.back-link:hover,
+.icon-text-button:hover {
+  color: var(--accent);
+}
+
+.danger-text-button,
+.danger {
+  color: var(--risk) !important;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-dot.positive {
+  background: var(--positive);
+}
+
+.status-dot.attention {
+  background: var(--attention);
+}
+
+.status-badge,
+.type-badge,
+.answer-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-family: var(--font-geist-mono), "SF Mono", monospace;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.status-badge {
+  padding: 5px 8px;
+  color: var(--ink-soft);
+  background: var(--neutral-bg);
+}
+
+.status-badge.positive,
+.answer-label.positive {
+  color: var(--positive);
+  background: var(--positive-bg);
+}
+
+.status-badge.attention {
+  color: var(--attention);
+  background: var(--attention-bg);
+}
+
+.status-badge.risk,
+.answer-label.risk {
+  color: var(--risk);
+  background: var(--risk-bg);
+}
+
+.status-badge.neutral {
+  color: var(--ink-soft);
+  background: var(--neutral-bg);
+}
+
+.type-badge {
+  padding: 5px 8px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.section-header h2 {
+  margin-bottom: 0;
+  font-size: 21px;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.page {
+  width: min(100%, var(--content));
+  margin: 0 auto;
+  animation: page-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.subpage {
+  padding-top: 30px;
+  padding-bottom: 96px;
+}
+
+.page-heading {
+  max-width: 820px;
+  margin-bottom: 34px;
+}
+
+.page-heading.split {
+  display: flex;
+  max-width: none;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 30px;
+}
+
+.page-heading h1,
+.report-heading h1 {
+  margin-bottom: 9px;
+  font-family: "Songti SC", "Noto Serif CJK SC", serif;
+  font-size: clamp(32px, 4vw, 48px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 1.12;
+}
+
+.page-heading > p:last-child,
+.report-heading p,
+.home-intro > div > p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field > span:first-child,
+fieldset legend {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field input,
+.field select,
+.field textarea {
+  min-height: 44px;
+  padding: 10px 12px;
+}
+
+.field.grow {
+  flex: 1;
+}
+
+.form-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--risk);
+  color: var(--risk);
+  background: var(--risk-bg);
+  font-size: 13px;
+  font-weight: 550;
+}
+

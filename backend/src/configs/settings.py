@@ -133,6 +133,60 @@ class Settings(BaseSettings):
     login_max_attempts: int = Field(default=8, ge=1, le=100)
     login_window_seconds: int = Field(default=15 * 60, ge=60)
 
+    # ── 邮件拉取 / 站内通知 ────────────────────────────────────────────────
+    # 邮件账户定时同步间隔（分钟），由 ScheduledTask 默认 cron 触发
+    email_sync_interval_minutes: int = Field(
+        default=15, ge=1, le=24 * 60, validation_alias="EMAIL_SYNC_INTERVAL_MINUTES"
+    )
+    # 每次 IMAP 拉取的批量上限
+    email_sync_batch_size: int = Field(
+        default=50, ge=1, le=500, validation_alias="EMAIL_SYNC_BATCH_SIZE"
+    )
+    # 每日邮件摘要生成 cron（默认每天 08:00）
+    daily_digest_cron: str = Field(
+        default="0 8 * * *", validation_alias="DAILY_DIGEST_CRON"
+    )
+    daily_digest_timezone: str = Field(
+        default="Asia/Shanghai", validation_alias="DAILY_DIGEST_TZ"
+    )
+    # 通知保留天数（已读 + 过期自动清理）
+    notification_retention_days: int = Field(
+        default=30, ge=1, le=365, validation_alias="NOTIFICATION_RETENTION_DAYS"
+    )
+
+    # ── 实体向量索引（MCP semantic_search） ───────────────
+    # Anspire 网关 embedding 接口配置；API key 从 ModelProviderConfig 解密获取
+    # （与 chat completion 复用同一组凭证），此处只配置 endpoint / model / batch。
+    anspire_embedding_endpoint: str = Field(
+        default="https://open-gateway.anspire.cn/v6/embeddings",
+        validation_alias="ANSPIRE_EMBEDDING_ENDPOINT",
+    )
+    anspire_embedding_model: str = Field(
+        default="text-embedding-v4",
+        validation_alias="ANSPIRE_EMBEDDING_MODEL",
+    )
+    # 单次批量调用 embedding API 的最大条数；Anspire 网关 text-embedding-v4
+    # 限制批量不超过 10 条，超过会返回 400 InvalidParameter。
+    embedding_batch_size: int = Field(
+        default=10, ge=1, le=10, validation_alias="EMBEDDING_BATCH_SIZE"
+    )
+    # embedding API 调用超时（秒）。
+    embedding_request_timeout: float = Field(
+        default=30.0, ge=5.0, le=120.0, validation_alias="EMBEDDING_REQUEST_TIMEOUT"
+    )
+    # 单条 content_text 最大字符数（超过截断，避免 embedding API 报错）。
+    embedding_max_content_chars: int = Field(
+        default=1500, ge=100, le=8000, validation_alias="EMBEDDING_MAX_CONTENT_CHARS"
+    )
+    # semantic_search 默认返回数量。
+    semantic_search_top_k: int = Field(
+        default=10, ge=1, le=100, validation_alias="SEMANTIC_SEARCH_TOP_K"
+    )
+    # 单表索引构建并发锁超时（秒）；超过此时间未更新 locked_at 视为僵尸。
+    embedding_lock_timeout_seconds: int = Field(
+        default=1800, ge=60, le=7200, validation_alias="EMBEDDING_LOCK_TIMEOUT"
+    )
+
     allowed_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -166,6 +220,13 @@ class Settings(BaseSettings):
     hermes_max_concurrent_runs: int = Field(default=2, ge=1, le=32)
     hermes_max_iterations: int = Field(default=10, ge=1, le=50)
     hermes_max_tokens: int | None = None
+    # 同一会话多轮对话时，传给 hermes 的历史消息最大条数（不含本轮 user）。
+    # hermes ``run_conversation`` 会把它作为 messages 起点 + 本轮 user 一起发给 LLM。
+    # 调大可让 LLM 看到更长上下文，但会增加 token 消耗；调小则可能丢失早期信息。
+    # 默认 5 条（约 2-3 轮历史对话），可通过环境变量 CONVERSATION_HISTORY_MAX_MESSAGES 配置。
+    conversation_history_max_messages: int = Field(
+        default=5, ge=0, le=200, validation_alias="CONVERSATION_HISTORY_MAX_MESSAGES"
+    )
 
     @field_validator("hermes_max_tokens", mode="before")
     @classmethod

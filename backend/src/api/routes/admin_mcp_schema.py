@@ -1,8 +1,8 @@
 """MCP v2 Schema 管理路由。
 
 挂载在 ``/admin/mcp-schemas`` 前缀下；v2 用 :class:`mcp_schema_registry` +
-``discover_schema`` / ``query_schema`` / ``execute_query`` 三个通用 MCP 工具
-代替旧版逐 case hardcode handler。
+``discover_schema`` / ``query_schema`` / ``execute_query`` / ``semantic_search``
+四个通用 MCP 工具代替旧版逐 case hardcode handler。
 """
 
 from __future__ import annotations
@@ -11,9 +11,14 @@ from fastapi import APIRouter, HTTPException, Path
 
 from api.deps import (
     McpSchemaServiceDep,
+    EntityIndexerServiceDep,
     PrincipalDep,
 )
 from schemas.mcp_schema import (
+    EmbeddingConfigIn,
+    EmbeddingConfigOut,
+    EmbeddingStatsOut,
+    EmbeddingTriggerOut,
     McpSchemaCandidateListOut,
     McpSchemaCatalogOut,
     McpSchemaDeleteOut,
@@ -112,3 +117,112 @@ async def refresh_all_schemas(
 ):
     """刷新企业所有注册表的 schema。"""
     return await service.refresh_all(principal)
+
+
+# ── 向量索引（embedding）管理 ─────────────────────────────
+
+
+@router.put(
+    "/{table_name}/embedding/config",
+    response_model=EmbeddingConfigOut,
+)
+async def configure_embedding(
+    payload: EmbeddingConfigIn,
+    table_name: str = Path(description="物理表名"),
+    principal: PrincipalDep = ...,
+    service: EntityIndexerServiceDep = ...,
+):
+    """配置单张表的 embedding 字段拼接规则。
+
+    - ``content_fields``：用于拼接 ``content_text`` 的字段（顺序敏感）
+    - ``metadata_fields``：冗余到 ``metadata_json`` 的字段，用于检索过滤
+
+    配置完成后需调用 ``POST /{table_name}/embedding/trigger`` 触发索引构建。
+    """
+    row = await service.configure_embedding(
+        table_name,
+        content_fields=payload.content_fields,
+        metadata_fields=payload.metadata_fields,
+        principal=principal,
+    )
+    return EmbeddingConfigOut(
+        table_name=row.table_name,
+        embedding_config_json=row.embedding_config_json or {},
+        embedding_status=row.embedding_status,
+        embedding_summary_json=row.embedding_summary_json or {},
+        last_indexed_at=row.last_indexed_at,
+        embedding_locked_at=row.embedding_locked_at,
+    )
+
+
+@router.get(
+    "/{table_name}/embedding/config",
+    response_model=EmbeddingConfigOut,
+)
+async def get_embedding_config(
+    table_name: str = Path(description="物理表名"),
+    principal: PrincipalDep = ...,
+    service: EntityIndexerServiceDep = ...,
+):
+    """查看单张表的 embedding 配置 + 当前构建状态。"""
+    data = await service.get_embedding_config(table_name, principal)
+    return EmbeddingConfigOut(**data)
+
+
+@router.post(
+    "/{table_name}/embedding/trigger",
+    response_model=EmbeddingTriggerOut,
+)
+async def trigger_embedding(
+    table_name: str = Path(description="物理表名"),
+    principal: PrincipalDep = ...,
+    service: EntityIndexerServiceDep = ...,
+):
+    """手动触发单张表的向量索引构建（异步 Job）。
+
+    返回 ``job_id``，前端可轮询
+    ``GET /{table_name}/embedding/config`` 查看构建状态
+    （``embedding_status`` = running / succeeded / failed / partial_success）。
+    """
+    result = await service.trigger_indexing(table_name, principal)
+    return EmbeddingTriggerOut(**result)
+
+
+@router.get(
+    "/{table_name}/embedding/stats",
+    response_model=EmbeddingStatsOut,
+)
+async def get_embedding_stats(
+    table_name: str = Path(description="物理表名"),
+    principal: PrincipalDep = ...,
+    service: EntityIndexerServiceDep = ...,
+):
+    """查看单张表 entity_embeddings 的行级统计（按 index_status 分组）。
+
+    用于管理端展示"已索引 N 条 / 失败 M 条 / 待处理 K 条"。
+    """
+    from sqlalchemy import func, select
+    from models.entity_embedding import EntityEmbedding
+
+    # 复用 service 的 session
+    session = service._session  # noqa: SLF001 — 同包内访问
+    result = await session.execute(
+        select(
+            EntityEmbedding.index_status,
+            func.count(EntityEmbedding.id),
+        )
+        .where(
+            EntityEmbedding.enterprise_id == principal.enterprise_id,
+            EntityEmbedding.source_table == table_name,
+        )
+        .group_by(EntityEmbedding.index_status)
+    )
+    counts = {row[0]: int(row[1]) for row in result.all()}
+    return EmbeddingStatsOut(
+        table_name=table_name,
+        total=sum(counts.values()),
+        indexed=counts.get("indexed", 0),
+        pending=counts.get("pending", 0),
+        failed=counts.get("failed", 0),
+        stale=counts.get("stale", 0),
+    )

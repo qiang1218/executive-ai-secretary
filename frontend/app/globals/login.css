@@ -1,0 +1,415 @@
+.login-page {
+  display: grid;
+  min-height: 100dvh;
+  grid-template-columns: minmax(0, 1.15fr) minmax(440px, 0.85fr);
+  background: var(--surface);
+}
+
+/* 刷新时的轻量启动屏，避免把加载状态误认为登录页 */
+.app-splash {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+}
+
+.app-splash-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-top-color: var(--accent, #2563eb);
+  animation: app-splash-spin 0.7s linear infinite;
+}
+
+@keyframes app-splash-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.login-context {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: clamp(34px, 5vw, 72px);
+  border-right: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.login-statement {
+  max-width: 700px;
+  padding: 90px 0 110px;
+}
+
+.login-statement h1 {
+  max-width: 11em;
+  margin-bottom: 24px;
+  font-family: "Songti SC", "Noto Serif CJK SC", serif;
+  font-size: clamp(48px, 6vw, 82px);
+  font-weight: 650;
+  letter-spacing: -0.055em;
+  line-height: 1.05;
+}
+
+.login-statement > p:last-child {
+  max-width: 560px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.login-principles {
+  display: grid;
+  margin: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--line-strong);
+}
+
+.login-principles > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  padding: 20px 18px 0 0;
+}
+
+.login-principles dt {
+  color: var(--faint);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+}
+
+.login-principles dd {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.login-principles dd strong {
+  font-size: 14px;
+}
+
+.login-principles dd span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.login-panel {
+  display: grid;
+  align-content: center;
+  padding: clamp(28px, 6vw, 96px);
+}
+
+.login-mode-switch {
+  display: grid;
+  width: min(100%, 430px);
+  margin: 0 auto 26px;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--line);
+}
+
+.login-mode-switch button {
+  padding: 11px 4px;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 600;
+  transition: color 180ms ease, box-shadow 180ms ease;
+}
+
+.login-mode-switch button.active {
+  color: var(--ink);
+  box-shadow: 0 2px 0 var(--ink);
+}
+
+.login-form {
+  display: grid;
+  width: min(100%, 430px);
+  margin: 0 auto;
+  gap: 18px;
+}
+
+.form-heading {
+  margin-bottom: 7px;
+}
+
+.form-heading h2 {
+  margin-bottom: 7px;
+  font-family: "Songti SC", "Noto Serif CJK SC", serif;
+  font-size: 42px;
+  line-height: 1.1;
+}
+
+.form-heading p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.password-field .input-with-action {
+  position: relative;
+  display: block;
+}
+
+.password-field .input-with-action input {
+  padding-right: 64px;
+}
+
+.input-with-action button {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  padding: 5px 8px;
+  color: var(--accent-dark);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  transform: translateY(-50%);
+}
+
+.demo-credential {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.demo-credential span {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.contact-note {
+  margin-bottom: 0;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: center;
+}
+
+.product-shell {
+  min-height: 100dvh;
+  padding-top: var(--header-height);
+}
+
+.network-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: calc(var(--z-header) + 1);
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 6px 20px;
+  color: #5f4514;
+  background: var(--attention-bg);
+  font-size: 12px;
+}
+
+.network-banner + .app-header {
+  top: 34px;
+}
+
+.network-banner button {
+  padding: 2px 5px;
+  color: #5f4514;
+  background: transparent;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.app-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-header);
+  display: grid;
+  width: 100%;
+  min-height: var(--header-height);
+  grid-template-columns: minmax(210px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 26px;
+  padding: 0 clamp(20px, 3vw, 46px);
+  border-bottom: 1px solid var(--line);
+  background: rgba(250, 249, 246, 0.96);
+  backdrop-filter: blur(16px);
+}
+
+.brand-button,
+.profile-button {
+  display: flex;
+  align-items: center;
+  text-align: left;
+  background: transparent;
+}
+
+.brand-button {
+  gap: 11px;
+  padding: 0;
+}
+
+.brand-button > span:last-child,
+.profile-button > span:last-child {
+  display: grid;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.brand-button strong,
+.profile-button strong {
+  font-size: 14px;
+}
+
+.brand-button small,
+.profile-button small {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.primary-nav button {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-small);
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  transition: color 180ms ease, background 180ms ease;
+}
+
+.primary-nav button:hover {
+  color: var(--ink);
+  background: var(--surface-quiet);
+}
+
+.primary-nav button.active {
+  color: var(--ink);
+  background: #e9e8e3;
+}
+
+.admin-nav {
+  overflow-x: auto;
+  justify-content: flex-start;
+  scrollbar-width: none;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.demo-button {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.demo-button span {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--accent-dark);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+
+.profile-control,
+.more-control {
+  position: relative;
+}
+
+.profile-button {
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.profile-button > span:first-child {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: var(--surface-quiet);
+  font-family: "Songti SC", serif;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.profile-menu,
+.more-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: calc(var(--z-header) + 2);
+  display: grid;
+  width: 190px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 10px 36px rgba(31, 36, 33, 0.08);
+}
+
+.profile-menu button,
+.more-menu button {
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 550;
+  text-align: left;
+}
+
+.profile-menu button:hover,
+.more-menu button:hover {
+  background: var(--surface-soft);
+}
+
+.app-main {
+  min-height: calc(100dvh - var(--header-height));
+  padding: 0 clamp(20px, 4vw, 56px);
+}
+

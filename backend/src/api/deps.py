@@ -25,6 +25,7 @@ from services.conversation_service import ConversationService
 from services.data_capability_service import DataCapabilityService
 from services.data_source_service import DataSourceService
 from services.daily_brief import DailyBriefService
+from services.email_account_service import EmailAccountService
 from services.file_service import FileService
 from services.harness_admin_service import HarnessAdminService
 from services.health_service import HealthService
@@ -32,6 +33,8 @@ from services.job_management_service import JobManagementService
 from services.mcp_schema_service import McpSchemaService
 from services.memory_service import MemoryService
 from services.model_admin_service import ModelAdminService
+from services.entity_indexer_service import EntityIndexerService
+from services.notification_service import NotificationService
 from services.hermes_client import HermesClient
 from services.organization_service import OrganizationService
 from services.project_service import ProjectService
@@ -136,6 +139,30 @@ async def get_memory_service(
 MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
 
 
+async def get_email_account_service(
+    session: AsyncSessionDep, settings: SettingsDep
+) -> EmailAccountService:
+    """FastAPI dependency: instantiate ``EmailAccountService``."""
+    return EmailAccountService(session, settings)
+
+
+EmailAccountServiceDep = Annotated[
+    EmailAccountService, Depends(get_email_account_service)
+]
+
+
+async def get_notification_service(
+    session: AsyncSessionDep, settings: SettingsDep
+) -> NotificationService:
+    """FastAPI dependency: instantiate ``NotificationService``."""
+    return NotificationService(session, settings)
+
+
+NotificationServiceDep = Annotated[
+    NotificationService, Depends(get_notification_service)
+]
+
+
 async def get_project_service(session: AsyncSessionDep) -> ProjectService:
     """FastAPI dependency: instantiate ``ProjectService``."""
     return ProjectService(session)
@@ -150,6 +177,18 @@ async def get_mcp_schema_service(session: AsyncSessionDep) -> McpSchemaService:
 
 
 McpSchemaServiceDep = Annotated[McpSchemaService, Depends(get_mcp_schema_service)]
+
+
+async def get_entity_indexer_service(
+    session: AsyncSessionDep, settings: SettingsDep
+) -> EntityIndexerService:
+    """FastAPI dependency: instantiate ``EntityIndexerService``."""
+    return EntityIndexerService(session, settings)
+
+
+EntityIndexerServiceDep = Annotated[
+    EntityIndexerService, Depends(get_entity_indexer_service)
+]
 
 
 async def get_admin_service(
@@ -255,14 +294,18 @@ __all__ = [
     "DailyBriefServiceDep",
     "AuthorizedModelServiceDep",
     "DataCapabilityServiceDep",
+    "EmailAccountServiceDep",
     "JobManagementServiceDep",
     "MemoryServiceDep",
+    "NotificationServiceDep",
     "ProjectServiceDep",
     "FileServiceDep",
     "ReportServiceDep",
     "OrganizationServiceDep",
     "DataSourceServiceDep",
     "McpSchemaServiceDep",
+    "EntityIndexerServiceDep",
+    "EntityIndexerService",
     "AuthServiceDep",
     "AdminServiceDep",
     "ConversationServiceDep",

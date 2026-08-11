@@ -138,6 +138,7 @@ class AgentRunner:
         disabled_toolsets: list[str] | None = None,
         mcp_servers: list[dict] | None = None,
         skills: list[str] | None = None,
+        conversation_history: list[dict] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """异步流式聊天。
 
@@ -147,6 +148,12 @@ class AgentRunner:
         ``enterprise_id`` 用于注入 MCP server 子进程 env，做多企业数据隔离。
         MCP server 通过 ``register_mcp_servers`` 全局注册（见
         ``_ensure_mcp_registered``），不再通过 AIAgent 构造参数传入。
+
+        ``conversation_history`` 为本会话历史消息（不含本轮 user message），
+        按 role/content 顺序传入。hermes ``run_conversation`` 会把它作为
+        ``messages`` 起点，再 append 本轮 user message，从而让 LLM 看到完整
+        上下文。``skip_memory=True`` 仅关闭 MemoryManager 长期记忆插件，
+        不会自动加载磁盘历史 —— 必须显式传 ``conversation_history``。
         """
         # 按企业注册 MCP server（企业切换时自动 shutdown 旧连接）
         if enterprise_id:
@@ -268,13 +275,27 @@ class AgentRunner:
         _turn_started = time.monotonic()
 
         def run_agent_sync() -> None:
-            """在线程池中同步执行 AIAgent.chat。"""
+            """在线程池中同步执行 AIAgent.run_conversation。
+
+            使用 ``run_conversation`` 而非 ``chat`` 的原因：``chat`` 不接受
+            ``conversation_history`` 参数，无法把 API 侧传入的历史消息透传
+            给 hermes，会导致同一会话内后续提问丢失上下文。
+            """
             try:
                 agent = AIAgent(**agent_kwargs)
-                # stream_callback 是 chat() 的方法参数，不是构造参数
-                result = agent.chat(message, stream_callback=stream_callback)
+                # stream_callback 是 run_conversation() 的方法参数，不是构造参数
+                result = agent.run_conversation(
+                    message,
+                    conversation_history=conversation_history,
+                    stream_callback=stream_callback,
+                )
+                final_response = ""
+                if isinstance(result, dict):
+                    final_response = result.get("final_response") or ""
+                elif isinstance(result, str):
+                    final_response = result
                 asyncio.run_coroutine_threadsafe(
-                    queue.put(StreamEvent(type="done", content=result or "")), loop
+                    queue.put(StreamEvent(type="done", content=final_response)), loop
                 )
             except Exception as e:  # noqa: BLE001
                 logger.exception("agent_chat_failed")

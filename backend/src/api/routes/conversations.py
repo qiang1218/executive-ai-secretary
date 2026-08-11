@@ -12,6 +12,7 @@ from api.deps import (
     ConversationServiceDep,
     ExecutivePrincipalDep,
     HermesClientDep,
+    SettingsDep,
     SkillServiceDep,
 )
 from schemas import (
@@ -200,6 +201,7 @@ async def create_message(
     service: ConversationServiceDep,
     hermes_client: HermesClientDep,
     skill_service: SkillServiceDep,
+    settings: SettingsDep,
 ) -> StreamingResponse:
     # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置 + harness prompt
     user_msg, context_messages, conv, llm_config, harness_prompt = await service.prepare_message(
@@ -208,6 +210,12 @@ async def create_message(
     system_prompt, harness_marker = harness_prompt
 
     # 2. 构造 worker 请求
+    # 按 settings 截断历史：保留最后 N+1 条（N 条历史 + 本轮 user）。
+    # context_messages 已按 sequence 升序，最后一条即本轮 user。
+    # 截断在 API 侧完成，避免 worker 与 hermes 处理超大 messages 数组。
+    max_msgs = settings.conversation_history_max_messages
+    if max_msgs > 0 and len(context_messages) > max_msgs + 1:
+        context_messages = context_messages[-(max_msgs + 1):]
     messages_for_worker = [
         {"role": m.role, "content": m.content} for m in context_messages
     ]

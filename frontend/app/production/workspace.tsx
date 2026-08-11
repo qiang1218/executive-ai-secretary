@@ -90,6 +90,7 @@ import {
   buildSidebarMenuState,
   findJobForMessage,
 } from "./workspace-actions";
+import { NotificationBell } from "./notification-bell";
 import { useThemePreference, useLanguagePreference } from "../shared/use-preferences";
 
 export function ProductionWorkspace({
@@ -102,6 +103,64 @@ export function ProductionWorkspace({
   onReload: () => Promise<void>;
 }) {
   const [bootstrap, setBootstrap] = useState(initialBootstrap);
+  // 当 app.tsx 通过 loadProductionBootstrapFast 后台加载完成、把完整 bootstrap 通过
+  // props 传回来时，同步到内部 state。仅当 props 比 state 更"丰富"时同步，
+  // 避免覆盖用户在 workspace 中已经做的局部修改（新建会话、归档、改 project 等）。
+  // hasHydratedRef 用于确保只同步一次后台完整数据；后续 props 变化由 workspace 自身控制。
+  const hasHydratedRef = useRef(false);
+  useEffect(() => {
+    if (hasHydratedRef.current) return;
+    // 判断 props 是否包含更丰富的数据：conversations 或 projects 数量更多，
+    // 或者 dailyBrief 出现了而 state 中没有。
+    const propsRicher =
+      initialBootstrap.conversations.length > bootstrap.conversations.length
+      || initialBootstrap.projects.length > bootstrap.projects.length
+      || (!bootstrap.dailyBrief && Boolean(initialBootstrap.dailyBrief))
+      || initialBootstrap.organizationUnits.length > bootstrap.organizationUnits.length;
+    if (!propsRicher) return;
+    hasHydratedRef.current = true;
+    setBootstrap((current) => {
+      // 合并而非覆盖：保留 state 中已有但 props 没有的会话/项目
+      // （用户在空壳阶段新建的会话可能还没被后台 bootstrap 包含）。
+      const currentConvIds = new Set(current.conversations.map((c) => c.id));
+      const currentProjIds = new Set(current.projects.map((p) => p.id));
+      const mergedConversations = [
+        ...current.conversations,
+        ...initialBootstrap.conversations.filter((c) => !currentConvIds.has(c.id)),
+      ];
+      const mergedProjects = [
+        ...current.projects,
+        ...initialBootstrap.projects.filter((p) => !currentProjIds.has(p.id)),
+      ];
+      return {
+        ...current,
+        // 用 props 的更完整数据覆盖集合型字段
+        conversations: mergedConversations,
+        projects: mergedProjects,
+        organizationUnits: initialBootstrap.organizationUnits.length > current.organizationUnits.length
+          ? initialBootstrap.organizationUnits
+          : current.organizationUnits,
+        dailyBrief: current.dailyBrief ?? initialBootstrap.dailyBrief,
+        // 以下字段 props 一定比 state 新（state 是空壳），直接覆盖
+        me: initialBootstrap.me,
+        authorizedModels: initialBootstrap.authorizedModels.length || !current.authorizedModels.length
+          ? initialBootstrap.authorizedModels
+          : current.authorizedModels,
+        dataCapabilities: initialBootstrap.dataCapabilities ?? current.dataCapabilities,
+        reports: initialBootstrap.reports.length || !current.reports.length
+          ? initialBootstrap.reports
+          : current.reports,
+        jobs: initialBootstrap.jobs.length || !current.jobs.length
+          ? initialBootstrap.jobs
+          : current.jobs,
+        memories: initialBootstrap.memories.length || !current.memories.length
+          ? initialBootstrap.memories
+          : current.memories,
+        personalProfile: initialBootstrap.personalProfile ?? current.personalProfile,
+        optionalErrors: initialBootstrap.optionalErrors,
+      };
+    });
+  }, [initialBootstrap, bootstrap.conversations.length, bootstrap.projects.length, bootstrap.dailyBrief, bootstrap.organizationUnits.length]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -504,6 +563,14 @@ export function ProductionWorkspace({
             // 中间助理评论：直接显示在内容区（不覆盖 fullContent，作为临时评论）
             const text = (event.content ?? "").trim();
             if (text) {
+              // 同步把这段评论挂到"当前正在运行的 stage"上，方便"显示在该阶段下面"。
+              const runningStage = [...toolSteps]
+                .reverse()
+                .find((s) => s.kind === "stage" && s.status === "running");
+              if (runningStage) {
+                const prev = typeof runningStage.stageData?.output === "string" ? runningStage.stageData!.output as string : "";
+                runningStage.stageData = { ...(runningStage.stageData ?? {}), output: prev ? `${prev}\n\n${text}` : text };
+              }
               flushContent(text);
             }
           } else if (event.type === "status") {
@@ -974,6 +1041,7 @@ export function ProductionWorkspace({
             <button type="button" className={activePanel === "weekly" ? "active" : ""} onClick={() => void openReport("weekly")}><span aria-hidden="true">周</span><strong className="sidebar-label">{c.weekly}</strong></button>
             <button type="button" className={activePanel === "history" ? "active" : ""} onClick={() => setActivePanel("history")}><span aria-hidden="true">历</span><strong className="sidebar-label">{c.history}</strong></button>
             <button type="button" className={activePanel === "memory" ? "active" : ""} onClick={() => setActivePanel("memory")}><span aria-hidden="true">记</span><strong className="sidebar-label">{c.memory}</strong></button>
+            <button type="button" className={activePanel === "email" ? "active" : ""} onClick={() => setActivePanel("email")}><span aria-hidden="true">邮</span><strong className="sidebar-label">邮箱</strong></button>
           </nav>
 
           <div className="sidebar-sections">
@@ -1095,7 +1163,7 @@ export function ProductionWorkspace({
           <button className="mobile-sidebar-trigger" type="button" aria-label="打开侧栏" onClick={() => setSidebarOpen(true)}>☰</button>
           <div className="workspace-title-block"><strong>{activeConversation?.title || (activeProjectId ? bootstrap.projects.find((item) => item.id === activeProjectId)?.name : null) || c.newConversation}</strong><small>{environmentLabel(me)} · {selectedScopeLabel}</small></div>
           <time className="workspace-topbar-date" dateTime={new Date().toISOString()}>{localizedDate(languagePreference, me.user.timezone)}</time>
-          <div className="workspace-topbar-actions"><button className="topbar-scope-button" type="button" onClick={() => setActivePanel("scope")}>数据状态</button><button className="topbar-refresh-button" type="button" aria-label="刷新工作台" onClick={() => void onReload()}>↻</button><button className="topbar-new-button" type="button" aria-label="新建会话" onClick={() => newConversation()}>＋</button></div>
+          <div className="workspace-topbar-actions"><NotificationBell /><button className="topbar-scope-button" type="button" onClick={() => setActivePanel("scope")}>数据状态</button><button className="topbar-refresh-button" type="button" aria-label="刷新工作台" onClick={() => void onReload()}>↻</button><button className="topbar-new-button" type="button" aria-label="新建会话" onClick={() => newConversation()}>＋</button></div>
         </header>
         <main id="main-content" className="workspace-main">
           {activeConversationId ? (

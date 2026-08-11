@@ -8,6 +8,8 @@ from __future__ import annotations
 from .audit import *  # noqa: F401,F403
 from .auth import *  # noqa: F401,F403
 from .common import *  # noqa: F401,F403
+from .email import *  # noqa: F401,F403
+from .notification import *  # noqa: F401,F403
 from .conversation import *  # noqa: F401,F403
 from .data import *  # noqa: F401,F403
 from .data_source import *  # noqa: F401,F403
@@ -28,6 +30,17 @@ from .user import *  # noqa: F401,F403
 __all__ = [
     "AuditEventOut",
     "AuditVerification",
+    "EmailAccountCreate",
+    "EmailAccountUpdate",
+    "EmailAccountOut",
+    "EmailAccountTestOut",
+    "EmailMessageOut",
+    "EmailSyncEnqueueOut",
+    "NotificationOut",
+    "UnreadCountOut",
+    "MarkReadRequest",
+    "MarkReadResult",
+    "DigestGenerateOut",
     "LoginRequest",
     "LoginResponse",
     "ChangePasswordRequest",

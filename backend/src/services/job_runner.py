@@ -84,10 +84,40 @@ async def _handle_system_noop(
     return {"status": "ok", "handled_at": utc_now().isoformat()}
 
 
+async def _handle_email_sync(
+    ctx: "JobRunnerContext", job: Job, settings: Settings
+) -> dict[str, Any]:
+    """邮件同步：委托 ``services.email_sync_service.run_email_sync``。"""
+    from services.email_sync_service import run_email_sync
+
+    return await run_email_sync(ctx, job, settings)
+
+
+async def _handle_daily_digest(
+    ctx: "JobRunnerContext", job: Job, settings: Settings
+) -> dict[str, Any]:
+    """每日邮件摘要：委托 ``services.daily_digest_service.run_daily_digest``。"""
+    from services.daily_digest_service import run_daily_digest
+
+    return await run_daily_digest(ctx, job, settings)
+
+
+async def _handle_entity_index(
+    ctx: "JobRunnerContext", job: Job, settings: Settings
+) -> dict[str, Any]:
+    """实体向量索引构建：委托 ``services.entity_indexer_service.run_entity_index``。"""
+    from services.entity_indexer_service import run_entity_index
+
+    return await run_entity_index(ctx, job, settings)
+
+
 DEFAULT_HANDLERS: Mapping[str, JobHandler] = {
     "data.sync": _handle_data_sync,
     "file.extract": _handle_file_extract,
     "system.noop": _handle_system_noop,
+    "email.sync": _handle_email_sync,
+    "daily_digest": _handle_daily_digest,
+    "entity.index": _handle_entity_index,
 }
 
 
@@ -294,7 +324,10 @@ def enqueue_due_scheduled_tasks(session: Session) -> int:
                 task.next_run_at = next_at
             continue
 
-        if task.data_source_id is None:
+        if task.data_source_id is None and task.task_type not in (
+            "email.sync",
+            "daily_digest",
+        ):
             logger.warning(
                 "scheduled_task_skip_no_data_source task_id=%s key=%s",
                 task.id,
@@ -313,24 +346,72 @@ def enqueue_due_scheduled_tasks(session: Session) -> int:
             )
             continue
 
-        job = Job(
-            enterprise_id=task.enterprise_id,
-            job_type="data.sync",
-            status="queued",
-            max_attempts=get_settings().worker_job_max_attempts,
-            payload_json={
-                "data_source_id": str(task.data_source_id),
-                "scheduled_task_id": str(task.id),
-                "trigger_type": "scheduled",
-                "validation_only": False,
-                "operation": "activate",
-                "activation_mode": "all_three_atomic",
-            },
-            scope_snapshot_json={
-                "enterprise_id": str(task.enterprise_id),
-            },
-            scheduled_at=now,
-        )
+        # 按 task_type 分发 job_type 与 payload；data.sync 仍走原逻辑
+        if task.task_type == "email.sync":
+            email_account_id = task.configuration_json.get("email_account_id")
+            if not email_account_id:
+                logger.warning(
+                    "scheduled_task_skip_no_email_account task_id=%s key=%s",
+                    task.id, task.key,
+                )
+                continue
+            job = Job(
+                enterprise_id=task.enterprise_id,
+                job_type="email.sync",
+                status="queued",
+                max_attempts=get_settings().worker_job_max_attempts,
+                payload_json={
+                    "email_account_id": str(email_account_id),
+                    "scheduled_task_id": str(task.id),
+                    "trigger_type": "scheduled",
+                },
+                scope_snapshot_json={
+                    "enterprise_id": str(task.enterprise_id),
+                },
+                scheduled_at=now,
+            )
+        elif task.task_type == "daily_digest":
+            user_id = task.configuration_json.get("user_id")
+            if not user_id:
+                logger.warning(
+                    "scheduled_task_skip_no_user task_id=%s key=%s",
+                    task.id, task.key,
+                )
+                continue
+            job = Job(
+                enterprise_id=task.enterprise_id,
+                job_type="daily_digest",
+                status="queued",
+                max_attempts=get_settings().worker_job_max_attempts,
+                payload_json={
+                    "user_id": str(user_id),
+                    "scheduled_task_id": str(task.id),
+                    "trigger_type": "scheduled",
+                },
+                scope_snapshot_json={
+                    "enterprise_id": str(task.enterprise_id),
+                },
+                scheduled_at=now,
+            )
+        else:
+            job = Job(
+                enterprise_id=task.enterprise_id,
+                job_type="data.sync",
+                status="queued",
+                max_attempts=get_settings().worker_job_max_attempts,
+                payload_json={
+                    "data_source_id": str(task.data_source_id),
+                    "scheduled_task_id": str(task.id),
+                    "trigger_type": "scheduled",
+                    "validation_only": False,
+                    "operation": "activate",
+                    "activation_mode": "all_three_atomic",
+                },
+                scope_snapshot_json={
+                    "enterprise_id": str(task.enterprise_id),
+                },
+                scheduled_at=now,
+            )
         session.add(job)
         session.flush()  # 取 job.id
 
@@ -621,17 +702,31 @@ def _is_awaitable(value: Any) -> bool:
 def _run_coro_blocking(coro: Any) -> Any:
     """Run ``coro`` blocking until it returns, working in both sync and async contexts.
 
-    When invoked from inside an event loop (the production runner's
-    ``_run`` task), we attach to that loop. When invoked synchronously
-    (e.g. from a unit test) we spin up a fresh loop via ``asyncio.run``.
+    When invoked from inside an already-running event loop (the production
+    runner's ``_run`` task), we can't call ``loop.run_until_complete`` —
+    that raises ``RuntimeError: This event loop is already running``. Instead
+    we run the coroutine on a worker thread's dedicated loop and wait for
+    the result. When invoked synchronously (e.g. from a unit test) we just
+    use ``asyncio.run`` directly.
     """
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
-        loop = None
-    if loop is not None and not getattr(loop, "_closed", False):
-        return loop.run_until_complete(coro)
-    return asyncio.run(_await_collect(coro))
+        # No running loop — safe to use asyncio.run.
+        return asyncio.run(_await_collect(coro))
+
+    # There IS a running loop in the current thread. Run the coroutine in
+    # a separate worker thread that has its own loop, then block this thread
+    # waiting for the result. This avoids the "already running" RuntimeError
+    # while still providing a synchronous return value for callers.
+    import concurrent.futures
+
+    def _runner() -> Any:
+        return asyncio.run(_await_collect(coro))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_runner)
+        return future.result()
 
 
 async def _await_collect(coro: Any) -> Any:

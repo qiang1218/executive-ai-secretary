@@ -1,0 +1,20 @@
+/*
+ * globals/index.css — 全局样式入口
+ *
+ * 由 globals.css 拆分而来，按功能模块组织：
+ *   base         — :root 变量、reset、通用元素
+ *   login        — 登录页 + 启动 splash 屏 + 旧版 demo 凭据/头像
+ *   home         — 工作台首页（greeting / composer / lead-grid）
+ *   conversation — 会话流、消息气泡、附件、记忆候选
+ *   workbench    — V5/V6/V7 工作台主体（侧栏、顶栏、对话、报表、个人设置）
+ *   admin        — Admin Shell（编排策略 / MCP Schema / Skills / 数据源）
+ *
+ * 顺序敏感：base 必须最先加载；后续模块可覆盖 base 的默认值。
+ */
+
+@import "./base.css";
+@import "./login.css";
+@import "./home.css";
+@import "./conversation.css";
+@import "./workbench.css";
+@import "./admin.css";

@@ -489,6 +489,47 @@ export type McpSchemaDeleteOut = {
   message: string;
 };
 
+// ── 向量索引（embedding） ───────────────────────────────
+
+export type EmbeddingConfig = {
+  content_fields: string[];
+  metadata_fields: string[];
+};
+
+export type EmbeddingConfigOut = {
+  table_name: string;
+  embedding_config_json: EmbeddingConfig;
+  embedding_status:
+    | "idle"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "partial_success";
+  embedding_summary_json: Record<string, unknown>;
+  last_indexed_at: string | null;
+  embedding_locked_at: string | null;
+};
+
+export type EmbeddingConfigIn = {
+  content_fields: string[];
+  metadata_fields?: string[];
+};
+
+export type EmbeddingTriggerOut = {
+  table_name: string;
+  job_id: string;
+  status: "queued" | "running";
+};
+
+export type EmbeddingStatsOut = {
+  table_name: string;
+  total: number;
+  indexed: number;
+  pending: number;
+  failed: number;
+  stale: number;
+};
+
 // ─────────────────────────────────────────────────────────
 
 export type DataSource = {
@@ -776,4 +817,87 @@ export type FileRecord = {
   status?: "uploaded" | "extracting" | "ready" | "failed";
   extracted_text_path?: string | null;
   preview_path?: string | null;
+};
+
+// ───────────────────────────────────────────────────────
+// 邮件账户 / 站内通知
+// ───────────────────────────────────────────────────────
+
+export type EmailAccount = {
+  id: string;
+  address: string;
+  display_name: string;
+  protocol: "imap" | "pop3";
+  server_host: string;
+  server_port: number;
+  use_tls: boolean;
+  is_enabled: boolean;
+  last_synced_at?: string | null;
+  last_uid?: number | null;
+  last_error_code?: string | null;
+  last_error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EmailAccountCreate = {
+  address: string;
+  display_name?: string;
+  protocol?: "imap" | "pop3";
+  server_host: string;
+  server_port?: number;
+  use_tls?: boolean;
+  password: string;
+  is_enabled?: boolean;
+};
+
+export type EmailAccountUpdate = {
+  display_name?: string;
+  protocol?: "imap" | "pop3";
+  server_host?: string;
+  server_port?: number;
+  use_tls?: boolean;
+  password?: string;
+  is_enabled?: boolean;
+};
+
+export type EmailAccountTestOut = {
+  ok: boolean;
+  error_code?: string | null;
+  error_message?: string | null;
+};
+
+export type EmailSyncEnqueueOut = {
+  job_id: string;
+  status: string;
+};
+
+export type NotificationType = "email_digest" | "email_urgent" | "daily_brief" | "system";
+export type NotificationImportance = "low" | "normal" | "high";
+
+export type AppNotification = {
+  id: string;
+  user_id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  payload_json: Record<string, unknown>;
+  importance: NotificationImportance;
+  is_read: boolean;
+  read_at?: string | null;
+  created_at: string;
+};
+
+export type UnreadCountOut = { unread: number };
+
+export type MarkReadRequest = {
+  ids?: string[] | null;
+  all?: boolean;
+};
+
+export type MarkReadResult = { updated: number };
+
+export type DigestGenerateOut = {
+  job_id: string;
+  status: string;
 };

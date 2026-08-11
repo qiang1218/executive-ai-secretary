@@ -6,7 +6,7 @@ import type {
 
 export type ThemePreference = "system" | "light" | "dark";
 export type UiLanguage = "zh-CN" | "zh-TW" | "en";
-export type WorkspacePanel = "daily" | "weekly" | "history" | "memory" | "scope";
+export type WorkspacePanel = "daily" | "weekly" | "history" | "memory" | "scope" | "email";
 export type PreferencesView = "profile" | "appearance" | "memory";
 export type ProjectDialogState = { mode: "create" } | { mode: "edit"; projectId: string };
 export type ConversationProjectDialogState = { conversationId: string };

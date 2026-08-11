@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 from .audit import *  # noqa: F401,F403
+from .email import *  # noqa: F401,F403
+from .entity_embedding import *  # noqa: F401,F403
 from .enterprise import *  # noqa: F401,F403
 from .user import *  # noqa: F401,F403
 from .project import *  # noqa: F401,F403
@@ -25,6 +27,11 @@ __all__ = [
     "AuditChainHead",
     "AuditEvent",
     "IdempotencyRecord",
+    "EmailAccount",
+    "EmailMessage",
+    "Notification",
+    "EntityEmbedding",
+    "EMBEDDING_DIMENSION",
     "Enterprise",
     "OrganizationUnit",
     "DataScopeGrant",

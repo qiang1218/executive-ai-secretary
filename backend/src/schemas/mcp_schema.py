@@ -130,3 +130,50 @@ class McpSchemaRefreshOut(BaseModel):
     columns_discovered: int
     refreshed_at: datetime.datetime
     error: str | None = None
+
+
+# ── 向量索引配置 / 触发 / 状态 ────────────────────────────
+
+
+class EmbeddingConfigIn(BaseModel):
+    """配置 embedding 字段拼接规则。"""
+
+    model_config = {"extra": "forbid"}
+
+    content_fields: list[str] = Field(
+        description="拼接成 content_text 的字段名列表（顺序敏感）"
+    )
+    metadata_fields: list[str] = Field(
+        default_factory=list,
+        description="冗余到 metadata_json 的字段名列表，用于检索过滤",
+    )
+
+
+class EmbeddingConfigOut(BaseModel):
+    """embedding 配置 + 状态输出。"""
+
+    table_name: str
+    embedding_config_json: dict[str, Any] = Field(default_factory=dict)
+    embedding_status: str = Field(description="idle / running / succeeded / failed / partial_success")
+    embedding_summary_json: dict[str, Any] = Field(default_factory=dict)
+    last_indexed_at: datetime.datetime | None = None
+    embedding_locked_at: datetime.datetime | None = None
+
+
+class EmbeddingTriggerOut(BaseModel):
+    """触发索引构建的结果。"""
+
+    table_name: str
+    job_id: str
+    status: str = Field(description="queued / running")
+
+
+class EmbeddingStatsOut(BaseModel):
+    """单表的 entity_embeddings 行级统计（按 index_status 分组）。"""
+
+    table_name: str
+    total: int = 0
+    indexed: int = 0
+    pending: int = 0
+    failed: int = 0
+    stale: int = 0

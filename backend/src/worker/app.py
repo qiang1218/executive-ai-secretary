@@ -132,6 +132,22 @@ async def chat_completions(
     system_parts = [m.content for m in req.messages if m.role == "system"]
     system_prompt = "\n\n".join(system_parts) if system_parts else req.system_prompt
 
+    # 构造 conversation_history：除最后一条 user 消息外的所有非 system 消息。
+    # system 消息已通过 system_prompt 注入，避免重复。
+    # hermes run_conversation 会把 history 作为 messages 起点，再 append 本轮
+    # user message，让 LLM 看到完整上下文（修复同一会话多轮对话失忆问题）。
+    conversation_history: list[dict] = []
+    found_last_user = False
+    for m in reversed(req.messages):
+        if not found_last_user:
+            if m.role == "user":
+                found_last_user = True
+            continue
+        if m.role == "system":
+            continue
+        conversation_history.append({"role": m.role, "content": m.content})
+    conversation_history.reverse()
+
     async def event_stream():
         try:
             async for event in agent_runner.chat(
@@ -150,6 +166,7 @@ async def chat_completions(
                 disabled_toolsets=req.disabled_toolsets,
                 mcp_servers=req.mcp_servers,
                 skills=req.skills,
+                conversation_history=conversation_history,
             ):
                 data: dict[str, Any] = {
                     "type": event.type,

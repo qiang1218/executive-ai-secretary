@@ -7,11 +7,13 @@ from . import (
     audit as _audit,
     audit_integrity as _audit_integrity,
     conversation as _conversation,
+    email as _email,
     file_asset as _file_asset,
     job as _job,
     message as _message,
     migration_compatibility as _migration_compatibility,
     model_provider_config as _model_provider_config,
+    notification as _notification,
     operating_data_reset as _operating_data_reset,
     organization_unit as _organization_unit,
     project as _project,
@@ -24,10 +26,12 @@ _SUBMODULES: dict[str, Any] = {
     "audit": _audit,
     "audit_integrity": _audit_integrity,
     "conversation": _conversation,
+    "email": _email,
     "file_asset": _file_asset,
     "job": _job,
     "message": _message,
     "model_provider_config": _model_provider_config,
+    "notification": _notification,
     "project": _project,
     "report": _report,
     "seed": _seed,
@@ -40,10 +44,12 @@ _SUBMODULES: dict[str, Any] = {
 AuditRepository = _audit
 AuditIntegrityRepository = _audit_integrity
 ConversationRepository = _conversation
+EmailRepository = _email
 FileAssetRepository = _file_asset
 JobRepository = _job
 MessageRepository = _message
 ModelProviderConfigRepository = _model_provider_config
+NotificationRepository = _notification
 ProjectRepository = _project
 ReportRepository = _report
 SeedRepository = _seed
@@ -66,10 +72,12 @@ __all__ = [
     "AuditRepository",
     "AuditIntegrityRepository",
     "ConversationRepository",
+    "EmailRepository",
     "FileAssetRepository",
     "JobRepository",
     "MessageRepository",
     "ModelProviderConfigRepository",
+    "NotificationRepository",
     "ProjectRepository",
     "ReportRepository",
     "SeedRepository",

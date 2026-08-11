@@ -13,6 +13,8 @@ import type {
   McpSchemaRegisterIn,
   McpSchemaUpdate,
   McpSchemaRefreshOut,
+  EmbeddingConfigOut,
+  EmbeddingStatsOut,
   ModelProviderConfig,
   Skill,
   SkillCreate,
@@ -300,6 +302,202 @@ export function ModelProviderPanel() {
 // ══════════════════════════════════════════════════════════
 // MCP v2 Schema 管理面板
 // ══════════════════════════════════════════════════════════
+
+const EMBEDDING_STATUS_LABEL: Record<string, string> = {
+  idle: "未构建",
+  running: "构建中",
+  succeeded: "成功",
+  failed: "失败",
+  partial_success: "部分成功",
+};
+
+function EmbeddingSection({ tableName, columns }: { tableName: string; columns: { name: string; type: string }[] }) {
+  const [config, setConfig] = useState<EmbeddingConfigOut | null>(null);
+  const [stats, setStats] = useState<EmbeddingStatsOut | null>(null);
+  const [contentFields, setContentFields] = useState<string>("");
+  const [metadataFields, setMetadataFields] = useState<string>("");
+  const [busy, setBusy] = useState<string | false>(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function loadAll() {
+    try {
+      const [cfg, st] = await Promise.all([
+        productionServices.adminMcpSchema.getEmbeddingConfig(tableName),
+        productionServices.adminMcpSchema.getEmbeddingStats(tableName),
+      ]);
+      setConfig(cfg);
+      setStats(st);
+      setContentFields((cfg.embedding_config_json?.content_fields ?? []).join(", "));
+      setMetadataFields((cfg.embedding_config_json?.metadata_fields ?? []).join(", "));
+    } catch (err) {
+      setError(humanizeApiError(err));
+    }
+  }
+
+  useEffect(() => {
+    setError("");
+    setNotice("");
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableName]);
+
+  // 当 config 状态变化时（如触发后变 running），轮询
+  useEffect(() => {
+    if (!config || config.embedding_status !== "running") return;
+    const timer = setInterval(() => { void loadAll(); }, 3000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config?.embedding_status]);
+
+  async function saveConfig() {
+    setBusy("save");
+    setError("");
+    setNotice("");
+    const cf = contentFields.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+    const mf = metadataFields.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+    if (cf.length === 0) {
+      setError("content_fields 至少填一个字段");
+      setBusy(false);
+      return;
+    }
+    try {
+      const cfg = await productionServices.adminMcpSchema.configureEmbedding(tableName, {
+        content_fields: cf,
+        metadata_fields: mf,
+      });
+      setConfig(cfg);
+      setNotice("配置已保存");
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function triggerIndex() {
+    setBusy("trigger");
+    setError("");
+    setNotice("");
+    try {
+      const result = await productionServices.adminMcpSchema.triggerEmbedding(tableName);
+      setNotice(`已触发构建，Job ID: ${result.job_id}`);
+      // 立即刷新一次状态
+      await loadAll();
+    } catch (err) {
+      setError(humanizeApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const status = config?.embedding_status ?? "idle";
+  const statusLabel = EMBEDDING_STATUS_LABEL[status] ?? status;
+  const summary = config?.embedding_summary_json ?? {};
+  const lastIndexed = config?.last_indexed_at
+    ? new Date(config.last_indexed_at).toLocaleString("zh-CN")
+    : null;
+
+  return (
+    <section className="mcp-schema mcp-embedding-section">
+      <header>
+        <strong>向量索引</strong>
+        <small>
+          状态：<span className={`mcp-embedding-status ${status}`}>{statusLabel}</span>
+          {lastIndexed && <span> · 上次构建：{lastIndexed}</span>}
+        </small>
+      </header>
+
+      <div className="mcp-embedding-stats">
+        <span><em>总行数</em><strong>{stats?.total ?? 0}</strong></span>
+        <span><em>已索引</em><strong className="mcp-embedding-stat-ok">{stats?.indexed ?? 0}</strong></span>
+        <span><em>失败</em><strong className="mcp-embedding-stat-err">{stats?.failed ?? 0}</strong></span>
+        <span><em>待处理</em><strong>{stats?.pending ?? 0}</strong></span>
+      </div>
+
+      {status === "running" && (
+        <p className="anspire-notice" role="status">
+          正在构建向量索引，请稍候（页面会自动刷新）…
+        </p>
+      )}
+      {status !== "idle" && status !== "running" && (
+        <div className="mcp-embedding-summary">
+          <small>上次构建摘要</small>
+          <code>{JSON.stringify(summary, null, 2)}</code>
+        </div>
+      )}
+
+      <div className="mcp-tool-form">
+        <label className="wide">
+          <span>content_fields（拼接成 embedding 内容的字段，逗号分隔）</span>
+          <textarea
+            rows={2}
+            value={contentFields}
+            onChange={(e) => setContentFields(e.target.value)}
+            placeholder="title, customer_name, opportunity_code, sales_owner"
+            disabled={busy === "save" || status === "running"}
+          />
+        </label>
+        <label className="wide">
+          <span>metadata_fields（冗余到 metadata 用于过滤的字段，逗号分隔，可选）</span>
+          <textarea
+            rows={2}
+            value={metadataFields}
+            onChange={(e) => setMetadataFields(e.target.value)}
+            placeholder="industry, status_code, customer_value_level"
+            disabled={busy === "save" || status === "running"}
+          />
+        </label>
+      </div>
+
+      {columns.length > 0 && (
+        <div className="mcp-embedding-cols">
+          <small>可用字段（点击复制到 content_fields）：</small>
+          <div className="mcp-embedding-col-chips">
+            {columns.map((c) => (
+              <button
+                key={c.name}
+                type="button"
+                className="mcp-col-chip"
+                onClick={() => {
+                  const cur = contentFields.split(/[,\s]+/).filter(Boolean);
+                  if (!cur.includes(c.name)) {
+                    setContentFields([...cur, c.name].join(", "));
+                  }
+                }}
+              >
+                {c.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {error && <p className="anspire-error" role="alert">{error}</p>}
+      {notice && <p className="anspire-notice" role="status">{notice}</p>}
+
+      <footer className="mcp-embedding-footer">
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={busy === "save" || status === "running"}
+          onClick={() => void saveConfig()}
+        >
+          {busy === "save" ? "保存中…" : "保存配置"}
+        </button>
+        <button
+          className="primary-button"
+          type="button"
+          disabled={busy === "trigger" || status === "running"}
+          onClick={() => void triggerIndex()}
+          title="保存配置后才能触发"
+        >
+          {busy === "trigger" ? "触发中…" : status === "running" ? "构建中…" : "触发向量化"}
+        </button>
+      </footer>
+    </section>
+  );
+}
 
 export function McpSchemaPanel() {
   const [catalog, setCatalog] = useState<McpSchemaCatalog | null>(null);
@@ -735,6 +933,12 @@ export function McpSchemaPanel() {
                   </div>
                 )}
               </section>
+
+              {/* 向量索引 */}
+              <EmbeddingSection
+                tableName={selected.table_name}
+                columns={selected.column_schema.map((c) => ({ name: c.name, type: c.type }))}
+              />
 
               {/* 示例数据 */}
               {selected.sample_rows && selected.sample_rows.length > 0 && (

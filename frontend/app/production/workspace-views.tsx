@@ -11,6 +11,8 @@ import {
 } from "react";
 import { AssistantOutputRenderer, parseAssistantOutput } from "./assistant-output";
 import { loadProductionBootstrap, productionServices } from "./services";
+import { looksLikeMarkdown, renderMarkdownToHtml } from "./markdown";
+import { stageKey, useStageOutputs } from "./use-stage-outputs";
 import type {
   AuthorizedModel,
   AuthMe,
@@ -268,7 +270,6 @@ export function ProductionConversation({
             />
           </article>
         ))}
-        {sending && <section className="processing-card" aria-live="polite"><p className="eyebrow">正在提交</p><h3>问题已进入受控处理流程</h3><p>系统不会在尚未收到真实结果时生成占位结论。</p></section>}
       </div></div></div>
       <div className="workspace-composer-dock chat-dock">
         <ProductionComposer
@@ -304,6 +305,48 @@ function AssistantMessageBody({
 }) {
   const envelope = parseAssistantOutput(message.content_json?.assistant_output);
   const toolSteps = message.tool_steps;
+  // 把 "无 envelope" 时整段 message.content 也按 Markdown 渲染并写入本地缓存，
+  // 实现"刷新后允许阶段和阶段内容对视"。
+  const conclusionFallback = useMemo(() => renderMarkdownToHtml(message.content), [message.content]);
+  const outputs = useStageOutputs(
+    conversationId || undefined,
+    message.id,
+    toolSteps,
+    conclusionFallback,
+  );
+  // 把"最终结论"渲染的 markdown 写入 sessionStorage（仅在没有 envelope 时）
+  useEffect(() => {
+    if (envelope) return;
+    if (!message.content) return;
+    if (!looksLikeMarkdown(message.content)) return;
+    outputs.setConclusion(conclusionFallback);
+    // 只在内容变化时同步即可。outputs 来自 useStageOutputs，每次渲染稳定
+    // 同一 messageId，因此结论渲染函数输出稳定就不会重复写。
+  }, [envelope, message.content, conclusionFallback, outputs]);
+
+  // 把每个 stage 自带的 stageData.output 镜像到 sessionStorage，以便"刷新后还能对齐"。
+  // 刷新场景：tool_steps 是从消息详情接口加载的，stageData.output 不一定还包含已被前端
+  // 消费掉的瞬时内容；本地缓存作为兜底，让用户重新展开执行进度时仍能看到阶段文本。
+  const mirroredStagesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!toolSteps) return;
+    for (let i = 0; i < toolSteps.length; i += 1) {
+      const step = toolSteps[i];
+      if (step.kind !== "stage") continue;
+      const raw = step.stageData?.output;
+      if (typeof raw !== "string" || !raw.trim()) continue;
+      const key = stageKey(step, i);
+      if (mirroredStagesRef.current.has(key)) continue;
+      const html = renderMarkdownToHtml(raw);
+      if (!html) continue;
+      mirroredStagesRef.current.add(key);
+      // 仅当本地缓存为空时写入，避免覆盖正在流式累积的更新。
+      if (!outputs.stageOutputs[key]) {
+        outputs.setOutputForStage(step, i, html);
+      }
+    }
+    // step 引用频繁变化，依赖 toolSteps 自身即可
+  }, [toolSteps, outputs]);
   return (
     <>
       {toolSteps && toolSteps.length > 0 && (
@@ -335,6 +378,13 @@ function AssistantMessageBody({
                   label = `${label}（已调用：${(step.stageData!.prev_tool_names as string[]).join("、")}）`;
                 }
               }
+              // 阶段下挂的输出：本地缓存里有则展示；否则若 result 看起来像 markdown 也渲染一次。
+              const cachedOutput = isStage ? outputs.stageOutputs[stageKey(step, i)] : undefined;
+              const derivedOutput =
+                !cachedOutput && !isStage && step.result && looksLikeMarkdown(step.result)
+                  ? renderMarkdownToHtml(step.result)
+                  : null;
+              const stageOutputHtml = isStage ? cachedOutput : derivedOutput;
               return (
                 <li
                   key={i}
@@ -342,7 +392,16 @@ function AssistantMessageBody({
                 >
                   <span className="tool-step-status" aria-hidden="true">{icon}</span>
                   <span className="tool-step-name">{label}</span>
-                  {!isStage && step.result && <span className="tool-step-result">{step.result.slice(0, 120)}</span>}
+                  {!isStage && step.result && !stageOutputHtml && (
+                    <span className="tool-step-result">{step.result.slice(0, 120)}</span>
+                  )}
+                  {stageOutputHtml && (
+                    <div
+                      className="stage-output"
+                      // 已经 escapeHtml + 自实现 markdown 渲染器，safe
+                      dangerouslySetInnerHTML={{ __html: stageOutputHtml }}
+                    />
+                  )}
                 </li>
               );
             })}
@@ -351,7 +410,13 @@ function AssistantMessageBody({
       )}
       {envelope
         ? <AssistantOutputRenderer envelope={envelope} onFollowUp={onFollowUp} />
-        : <section className="answer-conclusion"><p>{message.content || "正在等待真实处理结果…"}</p></section>}
+        : (
+          <section className="answer-conclusion">
+            {looksLikeMarkdown(message.content)
+              ? <div className="answer-conclusion-markdown" dangerouslySetInnerHTML={{ __html: outputs.conclusionHtml || conclusionFallback }} />
+              : <p>{message.content || "正在等待真实处理结果…"}</p>}
+          </section>
+        )}
       <MessageDetails
         conversationId={conversationId}
         message={message}
