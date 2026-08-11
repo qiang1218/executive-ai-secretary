@@ -80,21 +80,21 @@ conversation_context 和 active_memories 只用于理解指代、偏好和表达
 }
 
 
-# 每 profile 输出预算：根据输入 prompt ~560 tokens 实测,5 字段 JSON 输出
-# 实际需要 250-500 tokens。``route`` 原本 700 已经被 <reasoning>+ 输入挤压到
-# ``finish_reason=length``、让 admin 端 simulate 拿到 502
-# ``anspire_completion_truncated``。提到 1500 让 LLM 在预算内有 60% 余量
-# 给 reasoning 模型。其它 profile 也按同样比例放宽,保证不再次发生截断。
+# 每 profile 输出预算：reasoning 模型（deepseek-v4-pro-max / claude-opus-5 /
+# gpt-5.6-sol 等）会先把预算用在 reasoning_content 上，再生成 content。
+# 若预算过小，reasoning 用完后 content 为空 + finish_reason=length，导致 502。
+# 实测 route prompt ~560 tokens，5 字段 JSON 输出 ~250-500 tokens；
+# 给 reasoning 模型至少 4x 余量才能稳定产出 content。
 PROFILE_MAX_OUTPUT_TOKENS: dict[str, int] = {
-    "route": 1500,
-    "rewrite": 1600,
-    "plan": 1600,
-    "data": 2200,
-    "general": 2800,
-    # 邮件摘要：每封邮件约 50 tokens，10 封上限 800；留余量给 JSON 结构
-    "email_summarize": 1200,
-    # 每日 digest：限 300 字中文，约 600 tokens；留余量
-    "daily_digest": 1000,
+    "route": 4000,
+    "rewrite": 4000,
+    "plan": 4000,
+    "data": 6000,
+    "general": 6000,
+    # 邮件摘要：每封邮件约 50 tokens，10 封上限 800；reasoning + JSON 留余量
+    "email_summarize": 4000,
+    # 每日 digest：限 300 字中文，约 600 tokens；reasoning 留余量
+    "daily_digest": 3000,
 }
 
 

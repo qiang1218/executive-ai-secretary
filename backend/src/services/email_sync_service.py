@@ -22,6 +22,27 @@ from datetime import UTC, datetime
 from email.header import decode_header, make_header
 from typing import Any
 
+# 注册 IMAP ID 扩展命令（RFC 2971）
+# 163/126 邮箱要求 login 后立即发 ID 命令提供客户端身份，
+# 否则 SELECT 会返回 "Unsafe Login. Please contact kefu@188.com"
+imaplib.Commands["ID"] = ("AUTH", "SELECTED", "NONAUTH")
+
+
+def _send_imap_id(conn: imaplib.IMAP4) -> None:
+    """向 IMAP 服务器发送 ID 命令提供客户端身份。
+
+    163/126 邮箱在 login 后强制要求此命令，否则拒绝 SELECT。
+    其它服务器（Gmail/QQ/Outlook 等）会忽略或返回自身 ID，无副作用。
+    """
+    id_args = '("name" "ExecSecretary" "version" "1.0" "vendor" "Anchnet" "support-email" "")'
+    try:
+        # _simple_command 内部已调用 _command_complete 完成完整的请求-响应周期，
+        # 不要再调用 _command_complete（会导致 tag 不匹配，消费后续 SELECT 的响应）
+        conn._simple_command("ID", id_args)
+    except Exception:  # noqa: BLE001
+        # ID 失败不影响非 163 服务器，忽略即可
+        pass
+
 from sqlalchemy import select
 
 from configs.settings import Settings
@@ -67,6 +88,7 @@ def _imap_login_blocking(
         else:
             conn = imaplib.IMAP4(host, port)
         conn.login(address, password)
+        _send_imap_id(conn)
         return True, None, None
     except imaplib.IMAP4.error as exc:
         return False, "imap_auth_failed", str(exc)
@@ -298,6 +320,7 @@ def _fetch_new_messages(
         else:
             conn = imaplib.IMAP4(host, port)
         conn.login(address, password)
+        _send_imap_id(conn)
         conn.select("INBOX")
 
         typ, data = conn.uid("search", None, f"UID {last_uid + 1}:*")

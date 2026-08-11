@@ -451,15 +451,33 @@ def _extract_text(response_body: dict[str, Any]) -> tuple[str, int | None, int |
     if not text:
         finish_reason = first.get("finish_reason")
         refusal = message.get("refusal") if isinstance(message, dict) else None
+        # reasoning 模型（deepseek-v4-pro-max / claude-opus-5 等）可能把预算
+        # 全部用在 reasoning_content 上，导致 content 为空 + finish_reason=length。
+        # 记录 reasoning 是否有内容，便于排查是否 reasoning 占满预算。
+        reasoning_content = (
+            message.get("reasoning_content") if isinstance(message, dict) else None
+        )
+        reasoning_preview = (
+            str(reasoning_content)[:400] if reasoning_content else None
+        )
+        usage = response_body.get("usage") or {}
+        in_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+        out_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
         logger.error(
-            "anspire.empty_completion finish_reason=%s refusal=%s body=%s",
+            "anspire.empty_completion finish_reason=%s refusal=%s "
+            "reasoning_preview=%s input_tokens=%s output_tokens=%s body=%s",
             finish_reason,
             refusal,
+            reasoning_preview,
+            in_tokens,
+            out_tokens,
             _safe_log_body(response_body),
         )
         if finish_reason == "length":
             raise HermesRunError(
-                "Anspire 输出被截断（finish_reason=length），prompt 或预算过大",
+                "Anspire 输出被截断（finish_reason=length），"
+                "可能是 reasoning 模型把预算用在思考阶段、或 prompt 过大；"
+                f"input_tokens={in_tokens} output_tokens={out_tokens}",
                 status_code=502,
                 code="anspire_completion_truncated",
             )

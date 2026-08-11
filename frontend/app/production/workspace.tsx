@@ -169,8 +169,10 @@ export function ProductionWorkspace({
   const [draft, setDraft] = useState("");
   const [selectedOrganizationScope, setSelectedOrganizationScope] = useState<OrganizationScope>(ALL_ORGANIZATIONS_SCOPE);
   const [dailyBriefState, setDailyBriefState] = useState<DailyBriefLoadState>(() => ({
-    scopeKey: resolvedDailyBriefScopeKey(initialBootstrap.dailyBrief),
-    status: initialBootstrap.dailyBrief ? "ready" : "error",
+    // bootstrap 没返回 brief 时 scopeKey 设为空串，确保 useEffect 能发起首次加载请求
+    // （否则 scopeKey === dailyBriefScopeRequestKey === "all_authorized" 会直接 return）
+    scopeKey: initialBootstrap.dailyBrief ? resolvedDailyBriefScopeKey(initialBootstrap.dailyBrief) : "",
+    status: initialBootstrap.dailyBrief ? "ready" : "loading",
     data: initialBootstrap.dailyBrief,
   }));
   const [selectedModelId, setSelectedModelId] = useState(
