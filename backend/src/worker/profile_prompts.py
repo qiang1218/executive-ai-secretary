@@ -67,6 +67,16 @@ conversation_context 和 active_memories 只用于理解指代、偏好和表达
 不重复用户问题，不使用空洞的"背景—分析—总结"套话。
 回答要克制、清晰、有判断；事实不确定时明确边界。
 """.strip(),
+    "email_summarize": """
+你是邮件助手。为下面每封邮件生成 1 句中文摘要、重要性（low/normal/high）
+和 0-3 个标签。严格输出 JSON 数组，元素形如
+{"summary":"...","importance":"normal","labels":["..."]}。
+不要输出 Markdown 围栏或任何解释文字。
+""".strip(),
+    "daily_digest": """
+你是邮件助手。基于下面今日邮件列表，生成一段不超过 300 字的中文摘要，
+突出重要事项与待办。不要使用 Markdown，直接输出纯文本。
+""".strip(),
 }
 
 
@@ -81,6 +91,10 @@ PROFILE_MAX_OUTPUT_TOKENS: dict[str, int] = {
     "plan": 1600,
     "data": 2200,
     "general": 2800,
+    # 邮件摘要：每封邮件约 50 tokens，10 封上限 800；留余量给 JSON 结构
+    "email_summarize": 1200,
+    # 每日 digest：限 300 字中文，约 600 tokens；留余量
+    "daily_digest": 1000,
 }
 
 
@@ -199,8 +213,10 @@ def build_profile_prompt(profile: str, payload: dict[str, Any]) -> str:
         harness_config.get("prompts", {}) if isinstance(harness_config, dict) else {}
     )
     common_prompt = str(configured_prompts.get("system") or "").strip()[:12000]
+    # email_summarize / daily_digest 等独立任务不映射到 harness stage prompt，
+    # PROFILE_CONFIG_KEYS.get(profile) 返回 None 时 stage_prompt 为空字符串。
     stage_prompt = str(
-        configured_prompts.get(PROFILE_CONFIG_KEYS[profile]) or ""
+        configured_prompts.get(PROFILE_CONFIG_KEYS.get(profile) or "") or ""
     ).strip()[:12000]
     business_prompt_block = (
         f"\n\n<business_system_prompt>\n{common_prompt}\n</business_system_prompt>"

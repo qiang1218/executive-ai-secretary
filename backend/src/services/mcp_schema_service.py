@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import datetime
+import decimal
 import json
 import logging
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -228,8 +230,37 @@ class McpSchemaService:
                 f"表 {table_name!r} 当前未在企业名下注册",
             )
         await self._session.delete(row)
+
+        # 同步清理 entity_embeddings 中该表的全部向量数据，
+        # 避免注销后 semantic_search 仍返回已注销表的结果。
+        # 使用独立 session 调用，避免 ORM delete 触发 mcp_schema_registry
+        # 的级联加载（row 已 pending delete）。
+        from services.entity_indexer_service import EntityIndexerService
+        purge_service = EntityIndexerService(self._session, settings=None)
+        try:
+            purged = await purge_service.purge_embeddings(
+                table_name, principal.enterprise_id
+            )
+            if purged:
+                logger.info(
+                    "mcp_schema_unregister_purged_embeddings table=%s count=%d",
+                    table_name, purged,
+                )
+        except Exception as e:  # noqa: BLE001
+            # purge 失败不阻塞注销，仅记录日志；残留向量由下次手动触发清理。
+            logger.warning(
+                "mcp_schema_unregister_purge_failed table=%s error=%s",
+                table_name, e,
+            )
+
         await self._session.commit()
-        return McpSchemaDeleteOut(table_name=table_name, deleted=True, message="已注销")
+        return McpSchemaDeleteOut(
+            table_name=table_name,
+            deleted=True,
+            message="已注销" + (
+                f"（已清理 {purged} 条向量数据）" if purged else ""
+            ),
+        )
 
     # ── Schema 刷新 ───────────────────────────────────────
 
@@ -408,9 +439,35 @@ async def _fetch_sample_rows(
         rows = result.fetchall()
         if not rows:
             return None
-        return [dict(r._mapping) for r in rows]
+        return [_json_safe_row(r._mapping) for r in rows]
     except Exception:
         return None
+
+
+def _json_safe_row(mapping) -> dict:
+    """把 SQLAlchemy row mapping 转成 JSON 可序列化的 dict。
+
+    数据库返回的行可能包含 ``datetime`` / ``date`` / ``Decimal`` / ``UUID``
+    等原生 Python 类型，直接写入 JSONB 字段会触发
+    ``TypeError: Object of type datetime is not JSON serializable``。
+    这里统一转成 ``str`` 兜底，保证 ``json.dumps`` 与 JSONB 编码都能通过。
+    """
+    safe: dict = {}
+    for key, value in mapping.items():
+        if value is None:
+            safe[key] = None
+        elif isinstance(value, (str, int, float, bool)):
+            safe[key] = value
+        elif isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+            safe[key] = value.isoformat()
+        elif isinstance(value, uuid.UUID):
+            safe[key] = str(value)
+        elif isinstance(value, decimal.Decimal):
+            safe[key] = float(value)
+        else:
+            # bytes、enum、interval 等兜底转字符串
+            safe[key] = str(value)
+    return safe
 
 
 def _to_out(row: McpSchemaRegistry) -> McpSchemaOut:

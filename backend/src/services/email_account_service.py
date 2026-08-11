@@ -4,8 +4,8 @@
 IMAP 拉取的实际逻辑在 :mod:`services.email_sync_service`。
 
 同时为每个账户自动维护一条 ``ScheduledTask(task_type="email.sync")``，
-cron 表达式取自 ``Settings.email_sync_interval_minutes``（按 ``*/N * * * *``
-形式展开）。账户删除/停用时一并停用对应 ScheduledTask。
+cron 表达式取自 ``Settings.email_sync_cron``（默认每天 08:00）。
+账户删除/停用时一并停用对应 ScheduledTask。
 """
 
 from __future__ import annotations
@@ -36,15 +36,6 @@ from schemas import (
 from core.security import utc_now
 
 
-def _sync_cron(interval_minutes: int) -> str:
-    """根据同步间隔（分钟）生成 cron 表达式。"""
-    if interval_minutes <= 1:
-        return "* * * * *"
-    if 60 % interval_minutes == 0:
-        return f"*/{interval_minutes} * * * *"
-    return f"*/{interval_minutes} * * * *"
-
-
 async def _upsert_sync_task(
     session: AsyncSession,
     account: EmailAccount,
@@ -58,7 +49,7 @@ async def _upsert_sync_task(
             ScheduledTask.key == task_key,
         )
     )
-    cron_expr = _sync_cron(settings.email_sync_interval_minutes)
+    cron_expr = settings.email_sync_cron
     now = utc_now()
     if task is None:
         task = ScheduledTask(

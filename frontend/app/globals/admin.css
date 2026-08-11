@@ -515,12 +515,20 @@ html[data-theme="dark"] .production-admin-shell {
   background: color-mix(in srgb, var(--theme-positive) 12%, var(--theme-surface));
 }
 
-.mcp-column-grid { display: grid; gap: 8px; padding: 4px 0 6px; }
+.mcp-column-grid {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0 6px;
+  /* 自适应多列：列宽 280-1fr，容器够宽时一行排多个列，
+     28 列不再一个个换行堆叠，而是 2-3 列紧凑展示。 */
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
 .mcp-column-row {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px;
   align-items: center;
-  padding: 9px 12px; border: 1px solid var(--theme-line);
+  padding: 8px 10px; border: 1px solid var(--theme-line);
   border-radius: 9px; background: var(--theme-soft);
+  min-width: 0;
 }
 .mcp-column-row > .col-name {
   font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 10.5px;
@@ -535,7 +543,7 @@ html[data-theme="dark"] .production-admin-shell {
 }
 .mcp-column-row > .col-meta {
   color: var(--theme-muted); font-size: 10.5px; min-width: 0;
-  display: grid; gap: 2px; align-items: baseline;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
 }
 .mcp-column-row > .col-meta em {
   font-style: normal; font-size: 9px; font-weight: 620;
@@ -544,6 +552,8 @@ html[data-theme="dark"] .production-admin-shell {
   color: var(--theme-attention); width: max-content;
   display: inline-block;
 }
+.mcp-column-row > .col-meta > span,
+.mcp-column-row > .col-meta > em { white-space: nowrap; }
 .mcp-column-row > .col-type {
   font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 9.5px;
   padding: 2px 8px; border: 1px solid var(--theme-line); border-radius: 999px;
@@ -1922,6 +1932,32 @@ html[data-theme="dark"] .production-admin-shell {
 .skills-editor-files-meta small { color: var(--theme-accent-strong); font-family: var(--font-geist-mono), monospace; font-size: 8px; letter-spacing: .06em; }
 .skills-editor-files-meta h3 { margin: 0; font-size: 12.5px; font-weight: 590; letter-spacing: -.01em; }
 .skills-editor-files-meta > button { margin-left: auto; }
+
+/* 拖放区 —— 用于把整个文件夹拖入导入 */
+.skills-editor-dropzone {
+  display: grid; place-items: center;
+  min-height: 84px; padding: 14px 16px;
+  border: 1.5px dashed var(--theme-line); border-radius: 10px;
+  background: var(--theme-soft); color: var(--theme-muted);
+  transition: border-color .15s, background .15s, color .15s;
+  cursor: default;
+}
+.skills-editor-dropzone.dropzone-active {
+  border-color: var(--theme-accent);
+  background: color-mix(in srgb, var(--theme-accent) 8%, var(--theme-soft));
+  color: var(--theme-ink);
+}
+.skills-editor-dropzone .dropzone-content {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  text-align: center;
+}
+.skills-editor-dropzone .dropzone-icon { font-size: 20px; line-height: 1; }
+.skills-editor-dropzone .dropzone-hint { font-size: 11.5px; font-weight: 500; }
+.skills-editor-dropzone .dropzone-allowed {
+  font-family: var(--font-geist-mono), monospace; font-size: 9px; opacity: .7;
+}
+.skills-editor-dropzone .dropzone-feedback { font-size: 11px; color: var(--theme-accent-strong); margin-top: 4px; }
+.skills-editor-dropzone .dropzone-feedback-warn { color: var(--theme-warn, #c77700); }
 
 .skills-editor-file {
   display: grid; gap: 8px; padding: 12px 14px;

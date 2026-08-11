@@ -295,6 +295,37 @@ class EntityIndexerService:
             )
         return row
 
+    async def purge_embeddings(
+        self,
+        table_name: str,
+        enterprise_id: uuid.UUID,
+    ) -> int:
+        """清空指定表 + 企业的全部向量数据。
+
+        在 MCP schema 注销时调用，避免 entity_embeddings 残留幽灵向量
+        导致 semantic_search 返回已注销表的结果。
+
+        返回被删除的行数。
+        """
+        stmt = (
+            select(EntityEmbedding)
+            .where(
+                EntityEmbedding.enterprise_id == enterprise_id,
+                EntityEmbedding.source_table == table_name,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = await self._session.execute(stmt)
+        rows = result.scalars().all()
+        count = len(rows)
+        for r in rows:
+            await self._session.delete(r)
+        logger.info(
+            "entity_indexer_purged table=%s enterprise_id=%s count=%d",
+            table_name, enterprise_id, count,
+        )
+        return count
+
     async def _lock_and_load(
         self, enterprise_id: uuid.UUID, table_name: str
     ) -> McpSchemaRegistry:
@@ -321,14 +352,21 @@ class EntityIndexerService:
         now = utc_now()
         if row.embedding_status == "running" and row.embedding_locked_at is not None:
             elapsed = (now - row.embedding_locked_at).total_seconds()
-            if elapsed < self._settings.embedding_lock_timeout_seconds:
+            summary_status = (row.embedding_summary_json or {}).get("status")
+            # summary.status == "queued" 表示 trigger_indexing 刚排队、
+            # handler 还没接管过 —— 此时必须放行，否则 handler 永远拿不到锁。
+            # 只有 summary.status == "running"（另一个 handler 真在跑）才阻塞。
+            if (
+                summary_status == "running"
+                and elapsed < self._settings.embedding_lock_timeout_seconds
+            ):
                 raise IndexingError(
                     "already_running",
                     f"表 {table_name} 正在构建中（{int(elapsed)}s 前），请稍后再试",
                 )
             logger.warning(
-                "entity_indexer_lock_stale table=%s elapsed=%ss, taking over",
-                table_name, int(elapsed),
+                "entity_indexer_lock_stale table=%s elapsed=%ss summary=%s, taking over",
+                table_name, int(elapsed), summary_status,
             )
 
         row.embedding_status = "running"
@@ -724,9 +762,26 @@ async def run_entity_index(
         try:
             return await svc.run_indexing(enterprise_id, table_name)
         except IndexingError as exc:
-            # 把错误写到 mcp_schema_registry.embedding_summary_json
+            # 业务级错误：把错误写到 mcp_schema_registry.embedding_summary_json
             await _record_failure(session, enterprise_id, table_name, exc)
             return {"status": "failed", "code": exc.code, "message": str(exc)}
+        except Exception as exc:
+            # 兜底：未预期的异常（DB 连接、asyncpg、网络等），
+            # 也必须把 embedding_status 从 running 改成 failed，
+            # 否则前端轮询会永远认为"构建中"。
+            logger.exception(
+                "entity_index_unexpected_error table=%s enterprise=%s",
+                table_name, enterprise_id,
+            )
+            await _record_failure(
+                session, enterprise_id, table_name,
+                IndexingError("unexpected_error", f"{type(exc).__name__}: {exc}"),
+            )
+            return {
+                "status": "failed",
+                "code": "unexpected_error",
+                "message": f"{type(exc).__name__}: {exc}"[:4096],
+            }
 
 
 async def _record_failure(

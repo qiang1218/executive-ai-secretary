@@ -134,9 +134,11 @@ class Settings(BaseSettings):
     login_window_seconds: int = Field(default=15 * 60, ge=60)
 
     # ── 邮件拉取 / 站内通知 ────────────────────────────────────────────────
-    # 邮件账户定时同步间隔（分钟），由 ScheduledTask 默认 cron 触发
-    email_sync_interval_minutes: int = Field(
-        default=15, ge=1, le=24 * 60, validation_alias="EMAIL_SYNC_INTERVAL_MINUTES"
+    # 邮件账户定时同步 cron（默认每天 06:00）
+    # daily_digest_cron 默认 08:00，email.sync 提前 2 小时跑，确保
+    # daily_digest 生成摘要时当天邮件已落库。
+    email_sync_cron: str = Field(
+        default="0 6 * * *", validation_alias="EMAIL_SYNC_CRON"
     )
     # 每次 IMAP 拉取的批量上限
     email_sync_batch_size: int = Field(

@@ -380,6 +380,13 @@ function EmbeddingSection({ tableName, columns }: { tableName: string; columns: 
     setError("");
     setNotice("");
     try {
+      // 前端预检：必须先保存 content_fields 才能触发向量化，
+      // 否则后端会返回 embedding_not_configured。
+      const contentFields = (config?.embedding_config_json?.content_fields ?? []).filter((f) => f.trim().length > 0);
+      if (contentFields.length === 0) {
+        setError("请先在上方填写 content_fields 并点击「保存配置」，再触发向量化。");
+        return;
+      }
       const result = await productionServices.adminMcpSchema.triggerEmbedding(tableName);
       setNotice(`已触发构建，Job ID: ${result.job_id}`);
       // 立即刷新一次状态
@@ -1295,9 +1302,159 @@ function SkillEditor({
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [dropFeedback, setDropFeedback] = useState<{ ok: number; skipped: number; msg: string } | null>(null);
 
   function addFile() {
     setFiles((prev) => [...prev, { path: "", content: "" }]);
+  }
+
+  // ── 拖放文件夹：递归读取 entry，按相对路径合并进 files ──
+  function readEntry(entry: FileSystemEntry, prefix: string): Promise<{ path: string; content: string }[]> {
+    return new Promise((resolve) => {
+      if (entry.isFile) {
+        const fileEntry = entry as FileSystemFileEntry;
+        fileEntry.file(
+          (file) => {
+            const path = prefix ? `${prefix}/${file.name}` : file.name;
+            // 后缀白名单过滤（与后端 schemas/skill.py 一致）
+            const lower = path.toLowerCase();
+            if (!SKILL_ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+              resolve([]);
+              return;
+            }
+            // 路径安全过滤
+            if (path.split("/").includes("..") || path.startsWith("/") || path.includes("\\")) {
+              resolve([]);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+              resolve([{ path, content: String(reader.result ?? "") }]);
+            };
+            reader.onerror = () => resolve([]);
+            reader.readAsText(file);
+          },
+          () => resolve([]),
+        );
+      } else if (entry.isDirectory) {
+        const dirEntry = entry as FileSystemDirectoryEntry;
+        const reader = dirEntry.createReader();
+        const allEntries: FileSystemEntry[] = [];
+        const readBatch = () => {
+          reader.readEntries(
+            async (batch) => {
+              if (batch.length === 0) {
+                // 递归处理所有子 entry
+                const nested = await Promise.all(
+                  allEntries.map((e) => readEntry(e, prefix ? `${prefix}/${entry.name}` : entry.name)),
+                );
+                resolve(nested.flat());
+              } else {
+                allEntries.push(...batch);
+                readBatch(); // readEntries 一次最多返回 100 条，循环读到空
+              }
+            },
+            () => resolve([]),
+          );
+        };
+        readBatch();
+      } else {
+        resolve([]);
+      }
+    });
+  }
+
+  async function ingestDroppedItems(items: DataTransferItemList) {
+    const entries: FileSystemEntry[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind !== "file") continue;
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) entries.push(entry);
+    }
+    if (entries.length === 0) return;
+
+    // 如果只拖入一个目录，默认剥掉顶层目录名，用其内部相对路径展示
+    // （拖入 my-skill/SKILL.md → 路径为 "SKILL.md" 而非 "my-skill/SKILL.md"）
+    // 拖入多个项目或单个文件时保持原行为
+    let results: { path: string; content: string }[][];
+    if (entries.length === 1 && entries[0].isDirectory) {
+      const topDir = entries[0] as FileSystemDirectoryEntry;
+      const reader = topDir.createReader();
+      const childEntries: FileSystemEntry[] = [];
+      const readAllBatches = (): Promise<void> =>
+        new Promise((resolve) => {
+          reader.readEntries(
+            (batch) => {
+              if (batch.length === 0) resolve();
+              else {
+                childEntries.push(...batch);
+                readAllBatches().then(resolve);
+              }
+            },
+            () => resolve(),
+          );
+        });
+      await readAllBatches();
+      results = await Promise.all(childEntries.map((e) => readEntry(e, "")));
+    } else {
+      results = await Promise.all(entries.map((e) => readEntry(e, "")));
+    }
+    const flat = results.flat();
+
+    if (flat.length === 0) {
+      setDropFeedback({ ok: 0, skipped: 0, msg: "未发现可导入的文件（仅支持 .md/.txt/.py/.js/.yaml/.yml/.json/.sh/.toml）" });
+      return;
+    }
+
+    setFiles((prev) => {
+      const map = new Map(prev.map((f) => [f.path, f]));
+      let added = 0;
+      let overwritten = 0;
+      for (const f of flat) {
+        if (map.has(f.path)) overwritten++;
+        else added++;
+        map.set(f.path, f);
+      }
+      const next = Array.from(map.values());
+      // 如果当前 rootFile 不在列表中，且拖入了 SKILL.md，自动设为主入口
+      const hasRoot = next.some((f) => f.path === rootFile);
+      if (!hasRoot) {
+        const skillMd = next.find((f) => f.path === "SKILL.md");
+        if (skillMd) setRootFile("SKILL.md");
+      }
+      setDropFeedback({
+        ok: added + overwritten,
+        skipped: 0,
+        msg: `已导入 ${added} 个新文件${overwritten > 0 ? `，覆盖 ${overwritten} 个同名文件` : ""}`,
+      });
+      return next;
+    });
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragActive) setDragActive(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    // 只有离开拖放区本身才取消高亮（避免子元素触发）
+    if (e.currentTarget === e.target) setDragActive(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    setDropFeedback(null);
+    const items = e.dataTransfer.items;
+    if (items && items.length > 0) {
+      void ingestDroppedItems(items);
+    }
   }
 
   function updateFile(index: number, patch: Partial<SkillFileEntry>) {
@@ -1429,6 +1586,31 @@ function SkillEditor({
             >
               + 添加文件
             </button>
+          </div>
+
+          <div
+            className={`skills-editor-dropzone${dragActive ? " dropzone-active" : ""}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <div className="dropzone-content">
+              <span className="dropzone-icon">📁</span>
+              <span className="dropzone-hint">
+                拖拽文件夹到此处导入（支持嵌套目录）
+              </span>
+              <small className="dropzone-allowed">
+                允许: {SKILL_ALLOWED_EXTENSIONS.join(" ")}
+              </small>
+              {dropFeedback && (
+                <span
+                  className={`dropzone-feedback${dropFeedback.ok === 0 ? " dropzone-feedback-warn" : ""}`}
+                  role="status"
+                >
+                  {dropFeedback.msg}
+                </span>
+              )}
+            </div>
           </div>
 
           {files.map((f, i) => (

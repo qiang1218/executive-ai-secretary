@@ -471,8 +471,12 @@ def claim_next_job(worker_id: str, *, session: Session) -> tuple[Job, str] | Non
     # binder triggers.
     # Select the queued job AND its current attempt_count + job_type, so we
     # don't need a second round-trip via the ORM mapper afterwards.
+    # 必须同时取出 payload_json / enterprise_id / max_attempts，否则构造的
+    # transient Job 在 handler 里读 job.payload_json 会拿到空 dict，
+    # 导致 entity.index / email.sync / daily_digest 等 Job 全部静默 skip。
     select_sql_skeleton = """
-        SELECT id, attempt_count, job_type FROM jobs
+        SELECT id, attempt_count, job_type, payload_json, enterprise_id, max_attempts
+        FROM jobs
         WHERE status = 'queued'
           AND (scheduled_at IS NULL OR scheduled_at <= :now)
         ORDER BY (scheduled_at IS NULL), scheduled_at, created_at
@@ -480,7 +484,8 @@ def claim_next_job(worker_id: str, *, session: Session) -> tuple[Job, str] | Non
     """
     if is_postgres:
         select_sql = (
-            "SELECT id, attempt_count, job_type FROM jobs WHERE status = 'queued'"
+            "SELECT id, attempt_count, job_type, payload_json, enterprise_id, max_attempts"
+            " FROM jobs WHERE status = 'queued'"
             " AND (scheduled_at IS NULL OR scheduled_at <= :now) ORDER BY"
             " scheduled_at NULLS LAST, created_at FOR UPDATE SKIP LOCKED LIMIT 1"
         )
@@ -493,10 +498,9 @@ def claim_next_job(worker_id: str, *, session: Session) -> tuple[Job, str] | Non
     job_id = row[0]
     current_attempts = row[1] or 0
     job_type = row[2] or ""
-    if row is None:
-        return None
-    job_id = row[0]
-    current_attempts = row[1] or 0
+    payload_json = row[3] or {}
+    enterprise_id_raw = row[4]
+    max_attempts = row[5] or 3
     token = _new_lease_token()
 
     update_sql = (
@@ -526,12 +530,25 @@ def claim_next_job(worker_id: str, *, session: Session) -> tuple[Job, str] | Non
 
     # Build a transient Job in memory to return to the caller. We *do not*
     # read back via the ORM mapper; see the docstring above.
+    # 注意：payload_json / enterprise_id / max_attempts 必须从 SELECT 拿到的
+    # 原始值回填，否则 handler 读 job.payload_json 会得到空 dict。
+    if isinstance(enterprise_id_raw, uuid.UUID):
+        enterprise_id = enterprise_id_raw
+    elif enterprise_id_raw:
+        try:
+            enterprise_id = uuid.UUID(str(enterprise_id_raw))
+        except (ValueError, AttributeError):
+            enterprise_id = uuid.uuid4()  # fallback placeholder
+    else:
+        enterprise_id = uuid.uuid4()  # fallback placeholder
+
     job = Job(
         id=uuid.UUID(job_id) if isinstance(job_id, str) else job_id,
-        enterprise_id=uuid.uuid4(),  # placeholder; runner does not audit per-job
+        enterprise_id=enterprise_id,
         job_type=job_type,
         status="running",
-        max_attempts=3,
+        max_attempts=max_attempts,
+        payload_json=payload_json,
         started_at=now,
         lease_owner=worker_id,
         lease_token=token,
@@ -607,7 +624,7 @@ class JobRunner:
         logger.info("job_runner_started worker_id=%s", self._worker_id)
         while not self._stop_event.is_set():
             try:
-                processed = self._tick()
+                processed = await self._tick()
                 if not processed:
                     try:
                         await asyncio.wait_for(
@@ -623,8 +640,17 @@ class JobRunner:
                 await asyncio.sleep(1.0)
         logger.info("job_runner_stopped worker_id=%s", self._worker_id)
 
-    def _tick(self) -> bool:
-        """Run one poll cycle synchronously; return ``True`` if a job was handled."""
+    async def _tick(self) -> bool:
+        """Run one poll cycle; return ``True`` if a job was handled.
+
+        注意：``_tick`` 是 async 的，handler 返回的 coroutine 直接 ``await``，
+        不要扔进 ThreadPoolExecutor + 新 ``asyncio.run`` 里跑 —— 否则 handler
+        内部用的 ``AsyncSessionLocal``（绑定到主 loop 的 ``async_engine``）
+        会跨 event loop，触发 ``attached to a different loop``。
+
+        Sync 部分（claim job / finish_success）用同步 ``SessionLocal``，
+        在主 loop 上短暂阻塞，毫秒级可接受。
+        """
         with SessionLocal() as session:
             requeued = requeue_expired_leases(session=session)
             session.commit()
@@ -662,7 +688,8 @@ class JobRunner:
         try:
             coro_or_result = handler(self._context, job, self._settings)
             if _is_awaitable(coro_or_result):
-                result = _run_coro_blocking(coro_or_result)
+                # 直接在主 loop 上 await，避免跨 loop 使用 AsyncEngine
+                result = await coro_or_result
             else:
                 result = coro_or_result
         except Exception as exc:  # noqa: BLE001
@@ -697,40 +724,6 @@ class JobRunner:
 def _is_awaitable(value: Any) -> bool:
     """Return ``True`` if ``value`` is an awaitable / coroutine returned by an async handler."""
     return asyncio.iscoroutine(value) or asyncio.isfuture(value)
-
-
-def _run_coro_blocking(coro: Any) -> Any:
-    """Run ``coro`` blocking until it returns, working in both sync and async contexts.
-
-    When invoked from inside an already-running event loop (the production
-    runner's ``_run`` task), we can't call ``loop.run_until_complete`` —
-    that raises ``RuntimeError: This event loop is already running``. Instead
-    we run the coroutine on a worker thread's dedicated loop and wait for
-    the result. When invoked synchronously (e.g. from a unit test) we just
-    use ``asyncio.run`` directly.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop — safe to use asyncio.run.
-        return asyncio.run(_await_collect(coro))
-
-    # There IS a running loop in the current thread. Run the coroutine in
-    # a separate worker thread that has its own loop, then block this thread
-    # waiting for the result. This avoids the "already running" RuntimeError
-    # while still providing a synchronous return value for callers.
-    import concurrent.futures
-
-    def _runner() -> Any:
-        return asyncio.run(_await_collect(coro))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_runner)
-        return future.result()
-
-
-async def _await_collect(coro: Any) -> Any:
-    return await coro
 
 
 # --------------------------------------------------------------------------
