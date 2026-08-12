@@ -24,7 +24,11 @@ x-env-app: &env-app
   APP_ENV: ${APP_ENV:-production}
   APP_MODE: ${APP_MODE:-production}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  # 文件存储根目录（上传文件落盘位置，api 与 worker 共享同一卷）
   FILE_STORAGE_ROOT: /app/runtime/files
+  # HERMES_HOME：skill 文件释放目录，api 写入、worker 读取，必须共享同一卷
+  # hermes-agent 从 <HERMES_HOME>/skills/<slug>/SKILL.md 加载
+  HERMES_HOME: /app/runtime/skills_active
   FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY}
   FILE_ENCRYPTION_KEY_VERSION: ${FILE_ENCRYPTION_KEY_VERSION:-v1}
   INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY}
@@ -84,7 +88,10 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      - api_files:/app/runtime/files
+      # api 与 worker 共享 runtime 卷：
+      # - /app/runtime/files：上传文件落盘
+      # - /app/runtime/skills_active：HERMES_HOME，api 写入 skill、worker 读取
+      - runtime_data:/app/runtime
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
       interval: 15s
@@ -117,8 +124,10 @@ services:
     expose:
       - "8001"
     volumes:
-      - api_files:/app/runtime/files
-      - worker_hermes_home:/tmp/hermes-runtime
+      # 与 api 共享 runtime 卷：
+      # - /app/runtime/files：上传文件读取
+      # - /app/runtime/skills_active：HERMES_HOME，读取 api 写入的 skill 文件
+      - runtime_data:/app/runtime
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 15s
@@ -186,7 +195,8 @@ services:
 volumes:
   db_data:
     driver: local
-  api_files:
-    driver: local
-  worker_hermes_home:
+  # api 与 worker 共享的运行时卷：
+  # - files/：上传文件落盘（api 写、worker 读）
+  # - skills_active/：HERMES_HOME（api 写、worker 通过 hermes-agent 读）
+  runtime_data:
     driver: local

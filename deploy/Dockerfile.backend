@@ -54,12 +54,23 @@ COPY backend/ ./
 COPY deploy/init-seed.sh /app/deploy/init-seed.sh
 RUN chmod +x /app/deploy/init-seed.sh 2>/dev/null || true
 
+# 创建运行时目录（runtime 卷挂载点）
+# - runtime/files：上传文件落盘
+# - runtime/skills_active：HERMES_HOME，api 写入 skill、worker 读取
+# 挂载 docker named volume 时，目录属主会保持 root；预先创建子目录并放开权限，
+# 避免容器内非 root 进程（uvicorn）写入失败。
+RUN mkdir -p /app/runtime/files /app/runtime/skills_active \
+    && chmod -R 0777 /app/runtime
+
 # 环境变量
 ENV PATH="/app/.venv/bin:${PATH}"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH="/app/src"
 ENV SERVICE_ROLE=api
 ENV APP_ENV=production
+# HERMES_HOME：与 docker-compose.yml 的 env 保持一致；
+# hermes-agent 从 <HERMES_HOME>/skills/<slug>/SKILL.md 加载
+ENV HERMES_HOME=/app/runtime/skills_active
 
 EXPOSE 8000
 

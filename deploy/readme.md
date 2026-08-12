@@ -6,6 +6,10 @@
 浏览器 → nginx(:3000) ─┬─ /api/  → api(:8000) → db(:5432)
                         └─ /     → frontend-vinext(:3001)
 api(:8000) → worker(:8001)   # 内部 RPC（chat completions / profile run）
+
+api 与 worker 共享 runtime_data 卷：
+  /app/runtime/files          上传文件落盘（api 写、worker 读）
+  /app/runtime/skills_active  HERMES_HOME（api 写入 skill、worker 通过 hermes-agent 读）
 ```
 
 服务说明：
@@ -81,3 +85,8 @@ docker compose build            # 重新构建镜像
 - **COOKIE_SECURE**：生产环境（HTTPS）必须设 `true`
 - **WORKER_BASE_URL**：API 调用 worker 的地址，compose 内固定为 `http://worker:8001`
 - **CAPABILITY_HMAC_KEY**：worker 与 API 之间 capability token 的 HMAC 密钥
+- **HERMES_HOME**：skill 文件释放目录，容器内固定为 `/app/runtime/skills_active`；
+  api 与 worker 通过 `runtime_data` 共享卷读写，无需在 `.env` 中设置
+- **runtime_data 卷**：api 与 worker 共享 `/app/runtime`，包含 `files/`（上传文件）
+  和 `skills_active/`（HERMES_HOME）。如需宿主机挂载，修改 `docker-compose.yml`
+  的 `volumes` 段为 `./runtime:/app/runtime`
