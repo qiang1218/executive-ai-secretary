@@ -152,8 +152,8 @@ def _clean_text(value: Any, *, field: str, minimum: int = 1, maximum: int = 1200
 def compose_chat_system_prompt(
     config_json: dict[str, Any] | None,
 ) -> tuple[str, str]:
-    """把 ``HarnessConfigVersion.config_json`` 中 ``prompts.system`` 提取出来
-    供 Chat 接口使用。
+    """把 ``HarnessConfigVersion.config_json`` 中相关 prompt 槽组合成
+    实时 Chat 接口的 system_prompt。
 
     返回 ``(system_prompt, harness_version_id_or_literal_default)``。如果传入
     是空 dict 或无效配置，回退到 ``DEFAULT_HARNESS_CONFIG.prompts.system``
@@ -161,9 +161,24 @@ def compose_chat_system_prompt(
     ``system_prompt``—— worker 的 ``profile_prompts.SECURITY_KERNEL`` 由
     ``AgentRunner`` 自己前置注入，这里只负责"企业层语义"。
 
-    其他 prompt 槽（route / rewrite / plan / data_answer / general_answer）
-    仅供 profile 任务（``POST /v1/profile/run``）使用，与实时 Chat 接口无
-    直接关系，本函数不展开。
+    实时 Chat 路径（``AgentRunner.chat`` → ``AIAgent.run_conversation``，agentic
+    模式）应用的 prompt 槽：
+
+    - ``prompts.system``:全局系统提示词（必有，作为主体）
+    - ``prompts.data_answer``:数据回答风格约束（追加为"数据回答约束"段）
+    - ``prompts.general_answer``:通用回答风格约束（追加为"通用回答约束"段）
+    - ``glossary``:业务术语映射表（追加为"业务术语表"段，仅 enabled=True 项）
+
+    不应用的 prompt 槽（仅 profile 任务 / admin 调试路径使用）：
+
+    - ``prompts.route``:路由决策，agentic 模式 LLM 自主选择工具，不需要
+    - ``prompts.rewrite``:结构化 QuerySpec 改写，agentic 模式直接对话
+    - ``prompts.plan``:工具调用规划，agentic 模式 LLM 自主迭代
+    - ``fast_rules``:快速路由规则，仅 ``harness_admin_service.simulate`` 使用
+
+    注入位置：在 worker 侧 ``_inject_scope_prompt`` 之前，作为
+    ``ephemeral_system_prompt`` 传入 ``AIAgent``。worker 后续会在末尾追加
+    "本轮数据范围约束"段（事业部过滤提示）。
     """
     fallback = str(DEFAULT_HARNESS_CONFIG.get("prompts", {}).get("system", "")).strip()
     if not config_json:
@@ -177,7 +192,57 @@ def compose_chat_system_prompt(
     cleaned = raw_system.strip()
     if len(cleaned) < 12:
         return fallback or "你是一名企业数据助手。", "default"
+
+    # 追加 data_answer / general_answer 风格约束
+    extras: list[str] = []
+    data_answer_prompt = _extract_prompt(prompts, "data_answer")
+    if data_answer_prompt:
+        extras.append(
+            "---\n## 数据回答约束\n\n"
+            "回答涉及经营数据的问题时，遵循以下约束：\n\n"
+            + data_answer_prompt
+        )
+    general_answer_prompt = _extract_prompt(prompts, "general_answer")
+    if general_answer_prompt:
+        extras.append(
+            "---\n## 通用回答约束\n\n"
+            "回答非经营数据的泛化问题时，遵循以下约束：\n\n"
+            + general_answer_prompt
+        )
+
+    # 追加 glossary 业务术语表（仅 enabled=True 项）
+    glossary = config_json.get("glossary") if isinstance(config_json, dict) else None
+    if isinstance(glossary, list) and glossary:
+        glossary_lines: list[str] = []
+        for item in glossary:
+            if not isinstance(item, dict) or not item.get("enabled", True):
+                continue
+            term = str(item.get("term", "")).strip()
+            canonical = str(item.get("canonical", "")).strip()
+            category = str(item.get("category", "其他")).strip()
+            if term and canonical:
+                glossary_lines.append(f"- {term} → {canonical}（{category}）")
+        if glossary_lines:
+            extras.append(
+                "---\n## 业务术语表\n\n"
+                "用户提问中出现的下列术语，按映射关系理解：\n\n"
+                + "\n".join(glossary_lines)
+            )
+
+    if extras:
+        return cleaned + "\n\n" + "\n\n".join(extras), "custom"
     return cleaned, "custom"
+
+
+def _extract_prompt(prompts: dict[str, Any], key: str) -> str:
+    """从 prompts 字典中提取并清洗指定 key 的文本，无效时返回空字符串。"""
+    raw = prompts.get(key)
+    if not isinstance(raw, str):
+        return ""
+    cleaned = raw.strip()
+    if len(cleaned) < 12:
+        return ""
+    return cleaned
 
 
 def validate_harness_config(

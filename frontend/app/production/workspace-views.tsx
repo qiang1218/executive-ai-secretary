@@ -660,7 +660,9 @@ function OrganizationPicker({
   const label = scopeLabel(value, units, language);
   const filtered = units.filter((unit) => unit.name.toLowerCase().includes(query.trim().toLowerCase()));
   const selectedIds = new Set(draftScope.mode === "selected" ? draftScope.organization_unit_ids : units.map((unit) => unit.id));
-  const selectedCount = draftScope.mode === "all_authorized" ? units.length : draftScope.organization_unit_ids.length;
+  const selectedCount = selectedIds.size;
+  const allSelected = units.length > 0 && selectedCount === units.length;
+  const someSelected = selectedCount > 0 && !allSelected;
 
   const closeWithoutApplying = useCallback(() => {
     setDraftScope(value);
@@ -678,24 +680,31 @@ function OrganizationPicker({
   }
 
   function toggleUnit(unitId: string) {
-    if (draftScope.mode === "all_authorized") {
-      setDraftScope({ mode: "selected", organization_unit_ids: [unitId] });
-      return;
-    }
-    const current = draftScope.organization_unit_ids;
-    const next = current.includes(unitId)
-      ? current.filter((id) => id !== unitId)
-      : [...current, unitId];
-    if (next.length === units.length) {
-      setDraftScope(ALL_ORGANIZATIONS_SCOPE);
+    const next = new Set(selectedIds);
+    if (next.has(unitId)) {
+      next.delete(unitId);
     } else {
-      setDraftScope({ mode: "selected", organization_unit_ids: next });
+      next.add(unitId);
+    }
+    setDraftScope({ mode: "selected", organization_unit_ids: [...next] });
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setDraftScope({ mode: "selected", organization_unit_ids: [] });
+    } else {
+      setDraftScope({ mode: "selected", organization_unit_ids: units.map((unit) => unit.id) });
     }
   }
 
   function apply() {
     if (selectedCount < 1) return;
-    onChange({ mode: draftScope.mode, organization_unit_ids: [...draftScope.organization_unit_ids] });
+    // 提交时，若全部选中则归一化为 all_authorized（保持后端语义）
+    if (allSelected) {
+      onChange(ALL_ORGANIZATIONS_SCOPE);
+    } else {
+      onChange({ mode: "selected", organization_unit_ids: [...selectedIds] });
+    }
     setQuery("");
     setOpen(false);
   }
@@ -718,8 +727,9 @@ function OrganizationPicker({
         <header><strong>{c.businessUnitScope}</strong></header>
         {units.length > 5 && <label className="organization-search"><UiIcon name="search" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={c.searchBusinessUnits} autoFocus /></label>}
         <div className="organization-options" role="listbox" aria-multiselectable="true" aria-label="可分析事业部">
-          <button type="button" role="option" aria-selected={draftScope.mode === "all_authorized"} className={draftScope.mode === "all_authorized" ? "selected" : ""} onClick={() => setDraftScope(ALL_ORGANIZATIONS_SCOPE)}><span className="organization-check">{draftScope.mode === "all_authorized" ? "✓" : ""}</span><span>{c.scope}</span><UiIcon name="organization" /></button>
-          {filtered.map((unit) => <button type="button" role="option" aria-selected={draftScope.mode === "selected" && selectedIds.has(unit.id)} className={selectedIds.has(unit.id) && draftScope.mode === "selected" ? "selected" : ""} key={unit.id} onClick={() => toggleUnit(unit.id)}><span className="organization-check">{selectedIds.has(unit.id) && draftScope.mode === "selected" ? "✓" : ""}</span><span>{unit.name}</span><UiIcon name="organization" /></button>)}
+          <button type="button" role="option" aria-selected={allSelected} className={`organization-all-option ${allSelected ? "selected" : ""} ${someSelected ? "indeterminate" : ""}`} onClick={toggleAll}><span className="organization-check">{allSelected ? "✓" : someSelected ? "–" : ""}</span><span>{c.scope}</span></button>
+          <div className="organization-divider" aria-hidden="true" />
+          {filtered.map((unit) => <button type="button" role="option" aria-selected={selectedIds.has(unit.id)} className={selectedIds.has(unit.id) ? "selected" : ""} key={unit.id} onClick={() => toggleUnit(unit.id)}><span className="organization-check">{selectedIds.has(unit.id) ? "✓" : ""}</span><span>{unit.name}</span><UiIcon name="organization" /></button>)}
           {!filtered.length && <p className="organization-empty">没有匹配的事业部</p>}
         </div>
         <footer><small>可选范围由企业管理员配置</small><span>{selectedCount} / {units.length} 已选</span><button type="button" className="organization-apply" disabled={selectedCount < 1} onClick={apply}>{c.apply}</button></footer>

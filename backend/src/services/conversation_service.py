@@ -35,6 +35,7 @@ from models import (
     Job,
     Message,
     MessageEvidence,
+    OrganizationUnit,
     ProjectConversation,
 )
 from repositories import conversation as conversation_repo
@@ -395,6 +396,7 @@ class ConversationService:
             self._session.add(
                 ProjectConversation(project_id=project.id, conversation_id=item.id)
             )
+        await self._session.refresh(item)
         output = await self._conversation_out(principal, item)
         await record_audit(
             self._session,
@@ -707,8 +709,8 @@ class ConversationService:
         payload: MessageCreate,
         request: Request,
         principal: Principal,
-    ) -> tuple[Message, list[Message], Conversation, dict[str, str], tuple[str, str]]:
-        """创建 user message，返回 (user_msg, context_messages, conversation, llm_config, harness_prompt)。
+    ) -> tuple[Message, list[Message], Conversation, dict[str, str], tuple[str, str], dict]:
+        """创建 user message，返回 (user_msg, context_messages, conversation, llm_config, harness_prompt, scope_snapshot)。
 
         context_messages 包含历史消息 + 新 user message，供 worker 作为完整
         上下文使用。复用 ``create_message`` 的前半段校验与 user message 创建
@@ -721,6 +723,11 @@ class ConversationService:
         从 ``HarnessConfigVersion.config_json.prompts.system`` 派生，供 Chat
         入口作为 ``system_prompt=`` 注入到 worker 请求；marker 是 "default"
         或 "custom" —— 用于审计/调试透出"用户在跑这轮聊天时是哪一份 prompt"。
+
+        scope_snapshot = ``{"mode": ..., "organization_unit_ids": [...], "unit_names": [...]}``：
+        本轮消息最终生效的事业部范围（已规范化、已解析为 ID 列表），
+        供 worker 把 scope 信息注入 system_prompt，引导 LLM 生成带
+        ``organization_unit_id`` 过滤的 SQL。
 
         注意：流式接口不适合幂等，因此不调用 ``replay``/``save_response``。
         """
@@ -838,7 +845,21 @@ class ConversationService:
         harness_prompt = compose_chat_system_prompt(
             active_harness.config_json if active_harness is not None else None
         )
-        return message, context_messages, conversation, llm_config, harness_prompt
+        # 查询事业部名称，供 worker 把 scope 注入 system_prompt
+        unit_names: list[str] = []
+        if resolved_scope_ids:
+            unit_rows = await self._session.scalars(
+                select(OrganizationUnit.name).where(
+                    OrganizationUnit.id.in_(resolved_scope_ids)
+                )
+            )
+            unit_names = list(unit_rows)
+        scope_snapshot_for_llm: dict = {
+            "mode": normalized_scope.mode,
+            "organization_unit_ids": [str(item) for item in resolved_scope_ids],
+            "unit_names": unit_names,
+        }
+        return message, context_messages, conversation, llm_config, harness_prompt, scope_snapshot_for_llm
 
     async def save_assistant_message(
         self,

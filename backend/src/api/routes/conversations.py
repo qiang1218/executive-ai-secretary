@@ -203,8 +203,8 @@ async def create_message(
     skill_service: SkillServiceDep,
     settings: SettingsDep,
 ) -> StreamingResponse:
-    # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置 + harness prompt
-    user_msg, context_messages, conv, llm_config, harness_prompt = await service.prepare_message(
+    # 1. 创建 user message（落库）— service 返回 user_message + 上下文消息 + LLM 配置 + harness prompt + scope
+    user_msg, context_messages, conv, llm_config, harness_prompt, scope_snapshot_for_llm = await service.prepare_message(
         conversation_id, payload, request, principal
     )
     system_prompt, harness_marker = harness_prompt
@@ -242,6 +242,7 @@ async def create_message(
                 enterprise_id=str(principal.enterprise_id),
                 system_prompt=system_prompt,
                 skills=enabled_skill_slugs,
+                organization_scope=scope_snapshot_for_llm,
             ):
                 if event.type == "delta":
                     full_content.append(event.content)

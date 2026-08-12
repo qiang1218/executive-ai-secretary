@@ -70,6 +70,14 @@ class ChatRequest(BaseModel):
     disabled_toolsets: list[str] | None = None
     mcp_servers: list[dict] | None = None
     skills: list[str] | None = Field(default=None, description="启用的 skill slugs")
+    organization_scope: dict | None = Field(
+        default=None,
+        description=(
+            "本轮消息的事业部范围快照 "
+            "({mode, organization_unit_ids, unit_names})，"
+            "用于注入 system_prompt 引导 LLM 生成带 organization_unit_id 过滤的 SQL"
+        ),
+    )
     stream: bool = True
 
 
@@ -90,6 +98,47 @@ class ProfileRunOutput(BaseModel):
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+
+
+# --------------------------------------------------------------------------
+# Scope prompt injection
+# --------------------------------------------------------------------------
+
+def _inject_scope_prompt(base_prompt: str, scope: dict) -> str:
+    """把事业部范围信息追加到 system_prompt 末尾。
+
+    引导 LLM 在通过 MCP execute_query 执行 SQL 时，主动为含
+    ``organization_unit_id`` 字段的表加 WHERE 过滤，而不是强制注入
+    （强制注入会破坏 CTE/聚合/跨表 JOIN 等 SQL 结构）。
+    """
+    mode = scope.get("mode", "all_authorized")
+    unit_ids = scope.get("organization_unit_ids", []) or []
+    unit_names = scope.get("unit_names", []) or []
+
+    if mode == "all_authorized":
+        scope_desc = "全部授权事业部（不限制 organization_unit_id）"
+    elif not unit_ids:
+        scope_desc = "无可用事业部（请告知用户当前无可分析范围）"
+    else:
+        names_str = "、".join(unit_names) if unit_names else f"{len(unit_ids)} 个事业部"
+        ids_str = "', '".join(unit_ids)
+        scope_desc = (
+            f"仅以下事业部：{names_str}\n"
+            f"  对应 organization_unit_id IN ('{ids_str}')"
+        )
+
+    scope_section = (
+        "\n\n---\n"
+        "## 本轮数据范围约束\n\n"
+        f"用户本轮选定的数据范围为：{scope_desc}\n\n"
+        "在通过 execute_query 执行 SQL 查询经营数据时：\n"
+        "1. 若查询的表包含 `organization_unit_id` 字段（如 ods_opportunity、ods_delivery 等 ODS 表），"
+        "请在 WHERE 子句中加上 `organization_unit_id IN (...)` 过滤；\n"
+        "2. 若查询的是企业级配置表（如 data_source、organization_units）或表不含 "
+        "`organization_unit_id` 字段，则无需加该过滤；\n"
+        "3. 请勿假设所有表都有 organization_unit_id 字段，应先通过 discover_schema 查看表结构再决定。\n"
+    )
+    return base_prompt + scope_section
 
 
 # --------------------------------------------------------------------------
@@ -131,6 +180,12 @@ async def chat_completions(
 
     system_parts = [m.content for m in req.messages if m.role == "system"]
     system_prompt = "\n\n".join(system_parts) if system_parts else req.system_prompt
+
+    # 把本轮事业部范围注入 system_prompt，引导 LLM 生成 SQL 时自动加
+    # organization_unit_id 过滤。不强制注入 WHERE 避免破坏 SQL 结构
+    # （如 CTE / 聚合 / 跨表 JOIN）；LLM 会根据表结构自行判断是否加。
+    if req.organization_scope and system_prompt:
+        system_prompt = _inject_scope_prompt(system_prompt, req.organization_scope)
 
     # 构造 conversation_history：除最后一条 user 消息外的所有非 system 消息。
     # system 消息已通过 system_prompt 注入，避免重复。

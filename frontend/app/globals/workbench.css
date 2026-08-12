@@ -4374,10 +4374,10 @@ select:focus {
   left: 0;
   z-index: 170;
   display: grid;
-  width: 344px;
+  width: 280px;
   overflow: hidden;
   border: 1px solid var(--theme-line);
-  border-radius: 14px;
+  border-radius: 12px;
   color: var(--theme-ink);
   background: color-mix(in srgb, var(--theme-elevated) 97%, transparent);
   box-shadow: var(--theme-shadow-elevated);
@@ -4448,6 +4448,22 @@ select:focus {
 .organization-options button.selected {
   color: var(--theme-ink);
   background: var(--theme-accent-soft);
+}
+
+/* 全选框：独立分组，带分隔线 */
+.organization-all-option {
+  font-weight: 600;
+  color: var(--theme-ink);
+}
+.organization-all-option.indeterminate .organization-check {
+  border-color: var(--theme-accent-strong);
+  background: var(--theme-accent-strong);
+  color: var(--theme-canvas);
+}
+.organization-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--theme-line);
 }
 
 .organization-check {

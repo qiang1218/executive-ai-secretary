@@ -1640,11 +1640,6 @@ html[data-theme="dark"] .production-admin-shell {
   justify-content: flex-start;
 }
 
-.production-workbench-v2 .home-primary-composer .organization-popover {
-  top: calc(100% + 10px);
-  bottom: auto;
-}
-
 .production-workbench-v2 .organization-popover > footer > span {
   margin-left: auto;
 }

@@ -113,6 +113,7 @@ class HermesClient:
         disabled_toolsets: list[str] | None = None,
         mcp_servers: list[dict] | None = None,
         skills: list[str] | None = None,
+        organization_scope: dict | None = None,
     ) -> AsyncIterator[HermesStreamEvent]:
         """流式调用 worker /v1/chat/completions。
 
@@ -124,6 +125,11 @@ class HermesClient:
 
         ``skills`` 为已启用的 skill slug 列表，worker 侧 hermes-agent 从
         ``HERMES_HOME/skills/<slug>/SKILL.md`` 自动加载。
+
+        ``organization_scope`` 为本轮消息的事业部范围快照
+        (``{"mode", "organization_unit_ids", "unit_names"}``)，worker 会
+        把它追加到 system_prompt 末尾，引导 LLM 在生成 SQL 时主动加上
+        ``organization_unit_id`` 过滤条件（不强制注入 WHERE，避免破坏 SQL）。
         """
         payload: dict = {
             "base_url": base_url,
@@ -149,6 +155,8 @@ class HermesClient:
             payload["mcp_servers"] = mcp_servers
         if skills:
             payload["skills"] = skills
+        if organization_scope:
+            payload["organization_scope"] = organization_scope
 
         headers = {}
         if self._settings.hermes_api_key:
