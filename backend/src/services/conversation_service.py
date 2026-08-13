@@ -831,6 +831,9 @@ class ConversationService:
         )
         if provider_config is None:
             raise AppError(400, "llm_not_configured", "尚未配置 LLM 服务")
+        # model 用 resolve_authorized_model 解析后的 requested_model_id
+        # （已校验授权，可能来自 payload.model_id 或 conversation.selected_model_id），
+        # 而非 provider_config.model_id（后者是企业活跃配置的默认模型，会忽略用户选择）。
         llm_config: dict[str, str] = {
             "base_url": provider_config.endpoint_url,
             "api_key": decrypt_anspire_api_key(provider_config, self._get_settings())
@@ -838,7 +841,7 @@ class ConversationService:
             else "",
             "provider": provider_config.provider,
             "api_mode": "chat_completions",
-            "model": provider_config.model_id,
+            "model": requested_model_id,
         }
         # 把企业 harness 的 ``prompts.system`` 注入 worker；为空/无效配置时
         # 走 ``DEFAULT_HARNESS_CONFIG``，保证 worker 永远收到非空 system_prompt。
