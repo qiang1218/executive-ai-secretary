@@ -27,7 +27,6 @@ dependencies = [
   "python-docx>=1.2,<2",
   "python-pptx>=1.0,<2",
   "sqlalchemy>=2.0.37,<3",
-  "run-agent>=0.1,<1",
   "uvicorn[standard]>=0.34,<1",
 ]
 
@@ -41,8 +40,11 @@ dev = [
 # embedded 模式：worker 进程内直接 import hermes-runtime 调用，需要 hermes-agent。
 # hermes-runtime 本身的代码通过 sys.path 注入加载，无需作为包安装。
 # 安装方式：uv sync --extra hermes
+# mcp：hermes-agent 0.19.0 把 mcp 客户端 SDK 放在 [mcp] extra 里，
+# 不装则 import mcp 失败 → register_mcp_servers 静默跳过 → LLM 拿不到工具。
 hermes = [
   "hermes-agent==0.19.0",
+  "mcp>=1.24,<2",
 ]
 
 [tool.hatch.build.targets.wheel]

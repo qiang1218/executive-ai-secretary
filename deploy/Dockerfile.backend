@@ -30,16 +30,18 @@ WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock* ./
 
 # 安装全部依赖（含 hermes extra，worker 需要；api 不用但不影响）
+# --frozen：使用 uv.lock 中预解算的依赖，不重新解算
+# mcp 已纳入 pyproject.toml 的 hermes extra，随 uv sync 一起安装
 RUN uv venv /app/.venv \
-    && uv sync --extra hermes --no-dev --frozen 2>/dev/null || uv sync --extra hermes --no-dev
+    && uv sync --extra hermes --no-dev --frozen
 
 # ─── Stage 2: 运行镜像 ─────────────────────────────────────
 FROM python:3.12-slim-bookworm AS runner
 
 # 换源：apt 使用阿里云镜像
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 ca-certificates curl \
+    && apt-get update     && apt-get install -y --no-install-recommends \
+    libpq5 ca-certificates curl bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
