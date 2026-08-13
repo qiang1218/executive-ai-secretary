@@ -1188,6 +1188,7 @@ export function ProductionWorkspace({
               language={languagePreference}
               disclaimer={c.disclaimer}
               jobs={bootstrap.jobs}
+              me={me}
               onCancelAnswer={(messageId) => void cancelAnswer(messageId)}
               onRetryAnswer={(messageId) => void retryAnswer(messageId)}
             />

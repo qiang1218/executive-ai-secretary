@@ -20,6 +20,7 @@ import type {
   ConversationMessage,
   DataCapabilities,
   DailyBrief,
+  Job,
   OrganizationScope,
   OrganizationUnit,
 } from "./types";
@@ -209,6 +210,7 @@ export function ProductionConversation({
   language,
   disclaimer,
   jobs,
+  me,
   onCancelAnswer,
   onRetryAnswer,
 }: {
@@ -229,7 +231,8 @@ export function ProductionConversation({
   setSelectedModelId: (value: string) => void;
   language: UiLanguage;
   disclaimer: string;
-  jobs: import("./types").Job[];
+  jobs: Job[];
+  me?: AuthMe;
   onCancelAnswer: (messageId: string) => void;
   onRetryAnswer: (messageId: string) => void;
 }) {
@@ -250,24 +253,42 @@ export function ProductionConversation({
         {error && <section className="state-card" role="alert"><p className="eyebrow">加载失败</p><h3>暂时无法读取这条会话</h3><p>{error}</p></section>}
         {!loading && !error && !messages.length && <section className="chat-empty-state"><p className="eyebrow">空会话</p><h2>{conversation?.title || "新会话"}</h2><p>这条会话还没有消息，可以从下方输入框开始。</p></section>}
         {messages.map((message) => message.role === "system" && message.content_json?.event === "organization_scope_changed" ? (
-          <div className="scope-change-divider" role="status" key={message.id}><span />{message.content}<span /></div>
+          <div className="scope-change-divider" role="status" key={message.id}>
+            <span />
+            {message.content}
+            <span />
+          </div>
         ) : message.role === "user" ? (
-          <article className="user-message" key={message.id}><span>您</span><p>{message.content}</p><time>{formatTimestamp(message.created_at, language)}</time></article>
+          <article className="user-message" key={message.id}>
+            <span aria-hidden="true">{(me?.user?.display_name || me?.user?.preferred_name || "您").slice(0, 1)}</span>
+            <div>
+              <p>{message.content}</p>
+              <time>{formatTimestamp(message.created_at, language)}</time>
+            </div>
+          </article>
         ) : (
           <article className={`structured-answer production-answer ${message.status === "failed" ? "failed" : ""}`} key={message.id}>
-            <div className="answer-meta"><span>{message.role === "assistant" ? "AI 秘书" : message.role === "tool" ? "数据工具" : "系统"}</span><time>{formatTimestamp(message.created_at, language)}</time></div>
-            <AssistantMessageBody
-              conversationId={conversation?.id ?? message.conversation_id}
-              message={message}
-              onFollowUp={setDraft}
-            />
-            {message.status && message.status !== "completed" && <small className={`message-status ${message.status}`}>状态：{messageStatusLabel(message.status)}</small>}
-            <MessageJobActions
-              message={message}
-              job={jobs.find((item) => String(item.payload_json.assistant_message_id || "") === message.id)}
-              onCancel={() => onCancelAnswer(message.id)}
-              onRetry={() => onRetryAnswer(message.id)}
-            />
+            <span className="answer-avatar" aria-hidden="true">{message.role === "tool" ? "工" : "AI"}</span>
+            <div className="answer-card">
+              <div className="answer-meta">
+                <span>{message.role === "assistant" ? "AI 秘书" : message.role === "tool" ? "数据工具" : "系统"}</span>
+                <time>{formatTimestamp(message.created_at, language)}</time>
+              </div>
+              <AssistantMessageBody
+                conversationId={conversation?.id ?? message.conversation_id}
+                message={message}
+                onFollowUp={setDraft}
+              />
+              {message.status && message.status !== "completed" && (
+                <small className={`message-status ${message.status}`}>状态：{messageStatusLabel(message.status)}</small>
+              )}
+              <MessageJobActions
+                message={message}
+                job={jobs.find((item) => String(item.payload_json.assistant_message_id || "") === message.id)}
+                onCancel={() => onCancelAnswer(message.id)}
+                onRetry={() => onRetryAnswer(message.id)}
+              />
+            </div>
           </article>
         ))}
       </div></div></div>
@@ -433,7 +454,7 @@ function MessageJobActions({
   onRetry,
 }: {
   message: ConversationMessage;
-  job?: import("./types").Job;
+  job?: Job;
   onCancel: () => void;
   onRetry: () => void;
 }) {
@@ -548,7 +569,7 @@ function MessageDetails({
     }
   }
 
-  if (!metrics.length && !sections.length && !structuredMetrics.length && !Array.isArray(structuredRows) && !citations.length && !freshness.length && !clarificationId && !message.source_data_as_of && !message.model_name && message.role !== "assistant") return null;
+  if (!metrics.length && !sections.length && !structuredMetrics.length && !Array.isArray(structuredRows) && !citations.length && !freshness.length && !clarificationId && !message.source_data_as_of && !message.model_name) return null;
   return (
     <div className="production-message-details">
       {!contractRendered && metrics.length > 0 && <dl className="answer-metric-grid">{metrics.slice(0, 6).map((metric, index) => <div key={`${String(metric.label)}-${index}`}><dt>{String(metric.label ?? "指标")}</dt><dd>{String(metric.value ?? "—")}</dd>{metric.note ? <small>{String(metric.note)}</small> : null}</div>)}</dl>}

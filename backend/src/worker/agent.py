@@ -54,21 +54,44 @@ async def _ensure_mcp_registered(enterprise_id: str) -> None:
             # shutdown_mcp_servers 是同步阻塞调用，放到线程池避免阻塞事件循环
             await asyncio.to_thread(shutdown_mcp_servers)
 
+        # MCP 子进程环境变量。
+        # register_mcp_servers 内部用 _build_safe_env 构造子进程 env，只透传
+        # PATH/HOME 等基础变量 + 此处显式指定的变量，不会自动继承父进程环境。
+        # 因此 MCP server 调用 get_settings() 所需的 APP_ENV/SERVICE_ROLE，
+        # 以及 semantic_search 解密 Anspire API key 所需的加密密钥，必须显式注入。
+        # SERVICE_ROLE=migration：避开 protected 模式下对 SESSION_SECRET/
+        # CSRF_SECRET/AUDIT_HMAC_KEY 的严格校验（子进程不持有这些变量）。
+        child_env: dict[str, str] = {
+            "DATABASE_URL": get_settings().database_url,
+            "ENTERPRISE_ID": enterprise_id,
+            # 子进程是新 spawn 的 python，不执行 main.py，需要显式
+            # 注入 PYTHONPATH 让它能 import worker.mcp_server
+            "PYTHONPATH": str(__import__("pathlib").Path(__file__).resolve().parents[1]),
+            # 强制子进程用 UTF-8 标准流，避免 Windows 中文系统下
+            # 父进程 subprocess 读取时 gbk 解码失败
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "SERVICE_ROLE": "migration",
+            "APP_ENV": os.environ.get("APP_ENV", "development"),
+            "APP_MODE": os.environ.get("APP_MODE", "production"),
+        }
+        # semantic_search 解密 Anspire API key 需要 INTEGRATION_ENCRYPTION_KEY
+        # （mcp_server._get_embedding_api_key → decrypt_anspire_api_key）
+        for key in (
+            "INTEGRATION_ENCRYPTION_KEY",
+            "INTEGRATION_ENCRYPTION_KEY_VERSION",
+            "INTEGRATION_ENCRYPTION_KEY_RING",
+            "INTEGRATION_ENCRYPTION_KEY_RING_FILE",
+        ):
+            val = os.environ.get(key)
+            if val:
+                child_env[key] = val
+
         servers = {
             _MCP_SERVER_NAME: {
                 "command": sys.executable,
                 "args": ["-m", "worker.mcp_server"],
-                "env": {
-                    "DATABASE_URL": get_settings().database_url,
-                    "ENTERPRISE_ID": enterprise_id,
-                    # 子进程是新 spawn 的 python，不执行 main.py，需要显式
-                    # 注入 PYTHONPATH 让它能 import worker.mcp_server
-                    "PYTHONPATH": str(__import__("pathlib").Path(__file__).resolve().parents[1]),
-                    # 强制子进程用 UTF-8 标准流，避免 Windows 中文系统下
-                    # 父进程 subprocess 读取时 gbk 解码失败
-                    "PYTHONUTF8": "1",
-                    "PYTHONIOENCODING": "utf-8",
-                },
+                "env": child_env,
                 "timeout": 30,
                 "connect_timeout": 10,
             }

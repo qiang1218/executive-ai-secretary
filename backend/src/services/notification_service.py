@@ -48,7 +48,23 @@ class NotificationService:
             type_filter=type_filter,
             limit=limit,
         )
-        return [NotificationOut.model_validate(item) for item in rows]
+        # ORM 返回的 id/user_id 是 UUID，NotificationOut 用 str 表示。
+        # 使用 from_attributes 显式映射，避免 model_validate 默认 strict 校验失败。
+        return [
+            NotificationOut.model_validate(
+                {
+                    "id": str(item.id),
+                    "user_id": str(item.user_id),
+                    "type": item.type,
+                    "title": item.title,
+                    "body": item.body,
+                    "importance": item.importance,
+                    "is_read": item.is_read,
+                    "created_at": item.created_at,
+                }
+            )
+            for item in rows
+        ]
 
     async def unread_count(
         self, principal: Principal

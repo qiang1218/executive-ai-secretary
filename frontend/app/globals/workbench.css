@@ -904,6 +904,10 @@
   padding: 0 14px 0 18px;
   border-bottom: 1px solid #dde3dd;
   background: rgba(251, 252, 249, 0.96);
+  /* 让 topbar 在 workbench-shell 内部形成独立的 stacking context，
+     通知/账户菜单等浮层在 topbar 内部按 z-index 排序 */
+  z-index: 50;
+  position: relative;
 }
 
 .mobile-sidebar-trigger {
@@ -1371,22 +1375,53 @@
 }
 
 .workbench-shell .user-message {
-  max-width: min(78%, 680px);
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 9px;
-  padding: 12px 14px;
-  border: 1px solid #d9d9d1;
-  border-radius: 13px 13px 4px 13px;
-  background: var(--workbench-user-message);
+  /* 参考 chat 风格：右头像 + 左消息卡，user 消息整体靠右 */
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .workbench-shell .user-message > span {
-  display: none;
+  flex: 0 0 36px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-top: 2px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--theme-accent);
+  color: var(--theme-accent-contrast, #fff);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workbench-shell .user-message > div {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(82%, 720px);
+  text-align: left;
 }
 
 .workbench-shell .user-message p {
   margin: 0;
+  padding: 12px 16px 14px;
+  border: 1px solid var(--theme-line);
+  border-radius: 13px 13px 4px 13px;
+  background: var(--workbench-user-message);
   font-size: 13px;
+}
+
+.workbench-shell .user-message > div > time {
+  display: block;
+  margin-top: 4px;
+  color: var(--theme-muted);
+  font-size: 9px;
+  text-align: right;
 }
 
 .workbench-shell .clarification-card,
@@ -1407,11 +1442,19 @@
 }
 
 .workbench-shell .answer-meta {
-  background: #e7efe9;
+  /* 扁平化：去掉背景框，让"AI 秘书"标签以纯文字形式贴在内容上方 */
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0 0 6px;
+  box-shadow: none;
 }
 
 .workbench-shell .answer-conclusion {
-  padding: 28px 30px 25px;
+  /* 移除内容区的内边距/圆角/背景，让 markdown 直接流出 */
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .workbench-shell .answer-conclusion h2 {
@@ -3843,10 +3886,12 @@ select:focus {
 }
 
 .workbench-shell .user-message {
-  border-color: var(--theme-line);
+  /* dark theme override 修正：保持外层 article 透明背景，
+     背景和阴影移到内部的 p 卡上 */
+  border: 0;
   color: var(--theme-ink);
-  background: var(--theme-user);
-  box-shadow: 0 1px 2px rgba(30, 27, 23, 0.035);
+  background: transparent;
+  box-shadow: none;
 }
 
 .workbench-shell .user-message time {
@@ -3862,7 +3907,6 @@ select:focus {
 .workbench-shell .clarification-card,
 .workbench-shell .processing-card,
 .workbench-shell .state-card,
-.workbench-shell .structured-answer,
 .workbench-shell .file-list-section,
 .workbench-shell .memory-candidate,
 .workbench-shell .chat-empty-state {
@@ -3872,13 +3916,38 @@ select:focus {
   box-shadow: var(--theme-shadow-soft);
 }
 
+/* 排除 .structured-answer / .user-message：保持外层 article 透明，
+   背景和阴影由内部 .answer-card / p 卡承载，避免"双层背景" */
+
+/* dark theme override：再次单独确认 .structured-answer 透明 */
 .workbench-shell .structured-answer {
-  box-shadow: var(--theme-shadow-soft);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .workbench-shell .answer-meta {
-  border-color: var(--theme-line);
-  background: var(--theme-soft);
+  /* dark theme override：保持扁平（不覆盖前面 1413 的 transparent），
+     仅继承主题色变量 */
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.workbench-shell .answer-meta span {
+  color: var(--theme-ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workbench-shell .answer-meta time {
+  color: var(--theme-muted);
+  font-size: 9px;
 }
 
 .workbench-shell .answer-conclusion,
@@ -4755,7 +4824,7 @@ select:focus {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 40;
+  z-index: 200;
   width: min(360px, calc(100vw - 24px));
   max-height: 460px;
   display: flex;

@@ -1591,9 +1591,28 @@ html[data-theme="dark"] .production-admin-shell {
 }
 
 .production-answer {
-  border-color: var(--theme-line);
-  background: var(--theme-surface);
-  box-shadow: 0 1px 2px rgba(54, 46, 38, .025);
+  /* chat 风格：左头像 + 右消息卡（头像与卡之间有 14px gap，视觉分离） */
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.production-answer > .answer-avatar {
+  flex: 0 0 36px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-top: 2px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--theme-accent-contrast, #fff);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--theme-avatar-assistant, var(--theme-accent-soft));
 }
 
 .production-answer.failed {
@@ -1602,6 +1621,17 @@ html[data-theme="dark"] .production-admin-shell {
 
 .production-answer .answer-conclusion > p {
   white-space: pre-wrap;
+}
+
+/* 消息内容卡（套住 answer-meta + AssistantMessageBody + status/job actions） */
+.production-answer > .answer-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: min(86%, 820px);
+  padding: 12px 16px 14px;
+  border: 1px solid var(--theme-line);
+  border-radius: 13px 13px 13px 4px;
+  background: var(--theme-message-card, var(--workbench-message));
 }
 
 /* Phase 3 — targeted production refinement. Frozen Demo selectors are untouched. */
@@ -1670,11 +1700,12 @@ html[data-theme="dark"] .production-admin-shell {
 }
 
 .diagnostic-share-control {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 9px;
+  display: none !important;
+}
+
+/* diagnostic-share-confirm / .diagnostic-share-control > button 等子规则
+   在 .diagnostic-share-control display:none 后不可见，保留以备复用 */
+.diagnostic-share-control {
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--theme-line);
@@ -2043,8 +2074,12 @@ html[data-theme="dark"] .production-admin-shell {
   display: grid;
   gap: 18px;
   margin-top: 18px;
-  padding-top: 17px;
-  border-top: 1px solid var(--theme-line);
+  padding-top: 0;
+  border-top: 0;
+}
+
+.answer-section-list {
+  border-top: 0;
 }
 
 .answer-metric-grid {
@@ -2091,7 +2126,7 @@ html[data-theme="dark"] .production-admin-shell {
 }
 
 .answer-section-list {
-  border-top: 1px solid var(--theme-line);
+  border-top: 0;
 }
 
 .answer-section-list > section {
@@ -2099,7 +2134,7 @@ html[data-theme="dark"] .production-admin-shell {
   grid-template-columns: 38px minmax(0, 1fr);
   gap: 10px;
   padding: 13px 0;
-  border-bottom: 1px solid var(--theme-line);
+  border-bottom: 0;
 }
 
 .answer-section-list > section > span {
