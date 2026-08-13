@@ -151,6 +151,7 @@ def _clean_text(value: Any, *, field: str, minimum: int = 1, maximum: int = 1200
 
 def compose_chat_system_prompt(
     config_json: dict[str, Any] | None,
+    profile_prompt: str | None = None,
 ) -> tuple[str, str]:
     """把 ``HarnessConfigVersion.config_json`` 中相关 prompt 槽组合成
     实时 Chat 接口的 system_prompt。
@@ -168,6 +169,7 @@ def compose_chat_system_prompt(
     - ``prompts.data_answer``:数据回答风格约束（追加为"数据回答约束"段）
     - ``prompts.general_answer``:通用回答风格约束（追加为"通用回答约束"段）
     - ``glossary``:业务术语映射表（追加为"业务术语表"段，仅 enabled=True 项）
+    - ``profile_prompt``:用户个人偏好（追加为"用户个人偏好"段，可选）
 
     不应用的 prompt 槽（仅 profile 任务 / admin 调试路径使用）：
 
@@ -180,18 +182,26 @@ def compose_chat_system_prompt(
     ``ephemeral_system_prompt`` 传入 ``AIAgent``。worker 后续会在末尾追加
     "本轮数据范围约束"段（事业部过滤提示）。
     """
-    fallback = str(DEFAULT_HARNESS_CONFIG.get("prompts", {}).get("system", "")).strip()
+    fallback = str(DEFAULT_HARNESS_CONFIG.get("prompts", {}).get("system", "")).strip() or "你是一名企业数据助手。"
     if not config_json:
-        return fallback or "你是一名企业数据助手。", "default"
+        if profile_prompt:
+            return fallback + "\n\n" + profile_prompt, "default"
+        return fallback, "default"
     prompts = config_json.get("prompts") if isinstance(config_json, dict) else None
     if not isinstance(prompts, dict):
-        return fallback or "你是一名企业数据助手。", "default"
+        if profile_prompt:
+            return fallback + "\n\n" + profile_prompt, "default"
+        return fallback, "default"
     raw_system = prompts.get("system")
     if not isinstance(raw_system, str):
-        return fallback or "你是一名企业数据助手。", "default"
+        if profile_prompt:
+            return fallback + "\n\n" + profile_prompt, "default"
+        return fallback, "default"
     cleaned = raw_system.strip()
     if len(cleaned) < 12:
-        return fallback or "你是一名企业数据助手。", "default"
+        if profile_prompt:
+            return fallback + "\n\n" + profile_prompt, "default"
+        return fallback, "default"
 
     # 追加 data_answer / general_answer 风格约束
     extras: list[str] = []
@@ -228,6 +238,9 @@ def compose_chat_system_prompt(
                 "用户提问中出现的下列术语，按映射关系理解：\n\n"
                 + "\n".join(glossary_lines)
             )
+
+    if profile_prompt:
+        extras.append(profile_prompt)
 
     if extras:
         return cleaned + "\n\n" + "\n\n".join(extras), "custom"

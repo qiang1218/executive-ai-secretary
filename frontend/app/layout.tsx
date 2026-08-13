@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals/index.css";
@@ -16,6 +16,17 @@ const geistMono = Geist_Mono({
 const title = "董事长 AI 秘书 | 经营决策工作台";
 const description =
   "面向企业最高经营决策者的可信 AI 工作入口，提供经营变化、结构化分析、泛化问答和个人记忆管理。";
+
+// 显式导出 viewport：当 layout 定义了 generateMetadata 时，Next.js 不会自动注入
+// viewport meta 标签，需要单独导出。缺失会导致 vw/vh/rem 失真、整体内容被浏览器
+// 按默认桌面宽度（980px）缩小显示。
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+  themeColor: "#ffffff",
+};
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();

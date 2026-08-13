@@ -621,6 +621,14 @@ export function ProductionComposer({
   onSubmit: (event: FormEvent) => void;
 }) {
   const c = copy[language];
+  // 如果当前没有选中的模型（例如 bootstrap 时尚未拿到 authorizedModels），
+  // 但列表已经到达，默认选中第一项，避免 UI 显示"暂无可用模型"。
+  // 仅在 selectedModelId 为空时补选；用户已选择的（即便暂未在列表中）保持原值。
+  useEffect(() => {
+    if (!selectedModelId && authorizedModels.length > 0) {
+      setSelectedModelId(authorizedModels[0].model_id);
+    }
+  }, [selectedModelId, authorizedModels, setSelectedModelId]);
   const selectedModelIsAuthorized = authorizedModels.some((model) => model.model_id === selectedModelId);
   const selectedModelLabel = authorizedModels.find((model) => model.model_id === selectedModelId)?.display_name
     ?? (selectedModelId ? "原模型已取消授权" : "暂无可用模型");

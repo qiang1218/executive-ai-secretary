@@ -24,12 +24,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from configs.settings import get_settings
 from core.pagination import decode_cursor, encode_cursor
+from core.personal_data import decrypt_profile_payload
 from core.security import utc_now
 from exceptions.errors import AppError
 from models import (
     Clarification,
     Conversation,
     ConversationOrganizationScope,
+    ExecutivePersonalProfile,
     HarnessConfigVersion,
     HarnessDiagnosticGrant,
     Job,
@@ -77,6 +79,55 @@ from services.harness_config import (
 )
 from services.idempotency import replay, save_response
 from services.model_authorization import authorized_model_rows, resolve_authorized_model
+
+
+_AMOUNT_UNIT_LABEL: dict[str, str] = {"yuan": "元", "wan": "万元", "yi": "亿元"}
+_RESPONSE_STYLE_LABEL: dict[str, str] = {
+    "concise": "简洁",
+    "balanced": "平衡",
+    "detailed": "详细",
+}
+_LOCALE_LABEL: dict[str, str] = {"zh-CN": "简体中文", "zh-TW": "繁体中文", "en-US": "English"}
+
+
+async def _build_profile_prompt(
+    session: AsyncSession,
+    principal: Principal,
+) -> str | None:
+    """查询用户个人偏好并格式化为 prompt 段，无配置时返回 None。"""
+    from models import ExecutivePersonalProfile
+
+    row = await session.scalar(
+        select(ExecutivePersonalProfile).where(
+            ExecutivePersonalProfile.user_id == principal.user.id,
+            ExecutivePersonalProfile.enterprise_id == principal.enterprise_id,
+        )
+    )
+    if row is None:
+        return None
+    settings = get_settings()
+    try:
+        profile = decrypt_profile_payload(row, settings)
+    except Exception:
+        return None
+    if not isinstance(profile, dict):
+        return None
+    lines: list[str] = []
+    salutation = profile.get("salutation", "").strip()
+    if salutation:
+        lines.append(f"- 用户称呼：{salutation}")
+    amount_unit = profile.get("amount_unit", "")
+    if amount_unit in _AMOUNT_UNIT_LABEL:
+        lines.append(f"- 金额单位偏好：{_AMOUNT_UNIT_LABEL[amount_unit]}（对话中涉及金额时优先使用此单位）")
+    response_style = profile.get("response_style", "")
+    if response_style in _RESPONSE_STYLE_LABEL:
+        lines.append(f"- 回复风格偏好：{_RESPONSE_STYLE_LABEL[response_style]}")
+    locale = profile.get("locale", "")
+    if locale in _LOCALE_LABEL:
+        lines.append(f"- 语言偏好：{_LOCALE_LABEL[locale]}")
+    if not lines:
+        return None
+    return "---\n## 用户个人偏好\n\n" + "\n".join(lines)
 
 
 class ConversationService:
@@ -845,8 +896,11 @@ class ConversationService:
         }
         # 把企业 harness 的 ``prompts.system`` 注入 worker；为空/无效配置时
         # 走 ``DEFAULT_HARNESS_CONFIG``，保证 worker 永远收到非空 system_prompt。
+        # 同时注入用户个人偏好（称呼、金额单位、回复风格、语言等）。
+        profile_prompt = await _build_profile_prompt(self._session, principal)
         harness_prompt = compose_chat_system_prompt(
-            active_harness.config_json if active_harness is not None else None
+            active_harness.config_json if active_harness is not None else None,
+            profile_prompt=profile_prompt,
         )
         # 查询事业部名称，供 worker 把 scope 注入 system_prompt
         unit_names: list[str] = []
